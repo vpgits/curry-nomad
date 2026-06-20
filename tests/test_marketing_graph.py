@@ -78,7 +78,7 @@ def _check_guardrails(brief: VideoBrief) -> None:
 
 
 def test_workflow_produces_valid_brief_passing_guardrails():
-    graph = build_marketing_graph(model=_passing_model())
+    graph = build_marketing_graph(model=_passing_model(), auto_approve=True)
     result = graph.invoke(
         initial_marketing_state("30s reel for authentic Matale origin", "Ceylon Cinnamon")
     )
@@ -88,7 +88,7 @@ def test_workflow_produces_valid_brief_passing_guardrails():
 
 
 def test_product_grounding_uses_real_db_facts():
-    graph = build_marketing_graph(model=_passing_model())
+    graph = build_marketing_graph(model=_passing_model(), auto_approve=True)
     result = graph.invoke(initial_marketing_state("reel", "Ceylon Cinnamon (Alba)"))
     brief = result["brief"]
     # The product's real name + origin (Matale in the seed) must appear in the facts used.
@@ -99,13 +99,13 @@ def test_product_grounding_uses_real_db_facts():
 
 def test_parallel_ideation_count():
     n = get_settings().marketing_num_concepts
-    graph = build_marketing_graph(model=_passing_model())
+    graph = build_marketing_graph(model=_passing_model(), auto_approve=True)
     result = graph.invoke(initial_marketing_state("reel", "Black Pepper"))
     assert len(result["concepts"]) == n
 
 
 def test_send_fan_out_matches_shot_count():
-    graph = build_marketing_graph(model=_passing_model())
+    graph = build_marketing_graph(model=_passing_model(), auto_approve=True)
     result = graph.invoke(initial_marketing_state("reel", "Cloves"))
     assert len(result["shot_prompts"]) == len(result["shots"]) == 3
 
@@ -122,7 +122,7 @@ def test_evaluator_optimizer_loop_is_bounded():
             _BriefCopy: [_brief_copy()],
         }
     )
-    graph = build_marketing_graph(model=always_fail, settings=settings)
+    graph = build_marketing_graph(model=always_fail, settings=settings, auto_approve=True)
     result = graph.invoke(initial_marketing_state("reel", "Turmeric"))
     assert result["revision_count"] == settings.marketing_max_revisions
     assert isinstance(result["brief"], VideoBrief)  # still assembles after the bound
@@ -142,7 +142,7 @@ def test_one_revision_then_pass():
             _BriefCopy: [_brief_copy()],
         }
     )
-    result = build_marketing_graph(model=model).invoke(
+    result = build_marketing_graph(model=model, auto_approve=True).invoke(
         initial_marketing_state("reel", "Cardamom")
     )
     assert result["revision_count"] == 1
@@ -150,7 +150,7 @@ def test_one_revision_then_pass():
 
 
 def test_render_returns_placeholder():
-    graph = build_marketing_graph(model=_passing_model())
+    graph = build_marketing_graph(model=_passing_model(), auto_approve=True)
     result = graph.invoke(initial_marketing_state("reel", "Cloves"))
     assert result["render_result"]["status"] == "placeholder"
     assert result["render_result"]["asset_ref"] is None
@@ -158,7 +158,7 @@ def test_render_returns_placeholder():
 
 @pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="requires a live LLM key")
 def test_live_workflow_builds_a_brief():
-    graph = build_marketing_graph()
+    graph = build_marketing_graph(auto_approve=True)
     result = graph.invoke(
         initial_marketing_state("30s reel highlighting authentic Matale origin", "Ceylon Cinnamon")
     )

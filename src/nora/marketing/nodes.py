@@ -13,8 +13,10 @@ carries the finishing copy. They're implementation details, not part of the publ
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from typing import Literal
 
 from langgraph.runtime import Runtime
+from langgraph.types import Command, interrupt
 from pydantic import BaseModel
 
 from nora.config import Settings
@@ -149,6 +151,57 @@ def make_write_script(model, settings: Settings):
         return {"script_beats": draft.beats}
 
     return write_script
+
+
+def make_human_review(settings: Settings, *, auto_approve: bool = False):
+    """The single HITL gate (M3). It sits BEFORE the expensive creative steps (storyboard +
+    per-shot prompts), so the operator approves/edits/rejects the script before compute is
+    spent — gate by risk, not a final "are you sure?".
+
+    `interrupt()` is called exactly once. The node re-runs from the top on resume, so the
+    branch (approve / edit / reject) is decided from the resumed decision. `auto_approve=True`
+    skips the pause entirely — used by the eval harness to run unattended.
+    """
+
+    def human_review(state) -> Command[Literal["storyboard", "cancel"]]:
+        if auto_approve:
+            return Command(goto="storyboard", update={"approved": True})
+
+        log.info("hitl.raised", question="approve script")
+        decision = interrupt(
+            {
+                "question": "Approve this ~30s script before we generate the storyboard and "
+                "shot prompts?",
+                "script_beats": [beat.model_dump() for beat in state["script_beats"]],
+            }
+        )
+        approved = decision.get("approved", False) if isinstance(decision, dict) else bool(decision)
+        if not approved:
+            return Command(goto="cancel", update={"approved": False})
+
+        update: dict = {"approved": True}
+        edited = decision.get("edited_script") if isinstance(decision, dict) else None
+        if edited:  # honor an edited script
+            update["script_beats"] = [ScriptBeat(**beat) for beat in edited]
+        return Command(goto="storyboard", update=update)
+
+    return human_review
+
+
+def make_cancel(settings: Settings):
+    """Terminal node when the operator rejects the script."""
+
+    def cancel(state) -> dict:
+        log.info("marketing.cancelled")
+        return {
+            "render_result": {
+                "status": "cancelled",
+                "asset_ref": None,
+                "detail": "creative cancelled by user",
+            }
+        }
+
+    return cancel
 
 
 def make_storyboard(model, settings: Settings):

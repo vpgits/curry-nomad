@@ -33,11 +33,13 @@ class ScriptedChatModel:
     def __init__(self, messages: list[AIMessage]):
         self._messages = list(messages)
         self._i = 0
+        self.last_messages: list = []  # captured for prompt assertions
 
     def bind_tools(self, tools, **kwargs):  # noqa: ARG002 - signature parity only
         return self
 
     def invoke(self, messages, config=None, **kwargs):  # noqa: ARG002
+        self.last_messages = list(messages)
         if self._i >= len(self._messages):
             raise AssertionError("ScriptedChatModel ran out of scripted responses")
         msg = self._messages[self._i]
@@ -54,6 +56,7 @@ class _StructuredRunnable:
         self._schema = schema
 
     def invoke(self, prompt, config=None, **kwargs):  # noqa: ARG002
+        self._parent.record_prompt(str(prompt))
         return self._parent._next(self._schema)
 
 
@@ -72,6 +75,11 @@ class ScriptedStructuredModel:
         self._by_type = {k: list(v) for k, v in by_type.items()}
         self._shot_text = shot_text
         self._lock = threading.Lock()
+        self.prompts: list[str] = []  # captured for prompt assertions
+
+    def record_prompt(self, text: str) -> None:
+        with self._lock:
+            self.prompts.append(text)
 
     def bind_tools(self, tools, **kwargs):  # noqa: ARG002
         return self

@@ -14,18 +14,28 @@ from __future__ import annotations
 from typing import Literal
 
 from langchain.chat_models import init_chat_model
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
+from langgraph.runtime import Runtime
 
 from nora.analytics.prompts import build_system_prompt
 from nora.analytics.tools import ANALYTICS_TOOLS, _get_db
 from nora.config import Settings, get_settings
+from nora.memory import DEFINITIONS
 from nora.observability import get_logger
 from nora.services.interfaces import SqlError
 from nora.state import AnalyticsState
 
 log = get_logger(__name__)
+
+
+def _last_user_text(messages: list) -> str:
+    """The most recent human message text, used to query metric definitions from memory."""
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            return message.content if isinstance(message.content, str) else str(message.content)
+    return ""
 
 
 def handle_sql_error(error: SqlError) -> str:
@@ -69,8 +79,16 @@ def build_analytics_graph(
     # The table list is static for a given DB; fetch it once at build time.
     table_names = _get_db().list_tables()
 
-    def llm_node(state: AnalyticsState) -> dict:
-        system = build_system_prompt(table_names, settings)
+    def llm_node(state: AnalyticsState, runtime: Runtime) -> dict:
+        # Long-term memory (M3): pull metric definitions relevant to the question from the
+        # Store via runtime.store, and fold them into the system prompt so they shape the SQL.
+        definitions = ""
+        store = getattr(runtime, "store", None)
+        if store is not None:
+            query = _last_user_text(state["messages"]) or "metric definitions"
+            items = store.search(DEFINITIONS, query=query, limit=3)
+            definitions = "\n".join(item.value["text"] for item in items)
+        system = build_system_prompt(table_names, settings, definitions=definitions)
         response = model_with_tools.invoke([SystemMessage(content=system), *state["messages"]])
         return {"messages": [response]}
 

@@ -46,8 +46,14 @@ def build_marketing_graph(
     spice_db=None,
     checkpointer=None,
     store=None,
+    auto_approve: bool = False,
 ):
-    """Compile the marketing workflow. `model`/`spice_db` are injectable for offline tests."""
+    """Compile the marketing workflow. `model`/`spice_db` are injectable for offline tests.
+
+    `auto_approve=True` makes the human_review gate pass through without interrupting (eval
+    mode). With the default (False), running the graph requires a checkpointer + thread_id so
+    the interrupt can pause and resume.
+    """
     settings = settings or get_settings()
     if model is None:
         # Creative steps want some variation; the critic/assembler tolerate it fine.
@@ -61,6 +67,8 @@ def build_marketing_graph(
     builder.add_node("ideate", nodes.make_ideate(model, settings))
     builder.add_node("choose_concept", nodes.make_choose_concept(settings))
     builder.add_node("write_script", nodes.make_write_script(model, settings))
+    builder.add_node("human_review", nodes.make_human_review(settings, auto_approve=auto_approve))
+    builder.add_node("cancel", nodes.make_cancel(settings))
     builder.add_node("storyboard", nodes.make_storyboard(model, settings))
     builder.add_node("shot_prompt_worker", nodes.make_shot_prompt_worker(model, settings))
     builder.add_node("critique", nodes.make_critique(model, settings))
@@ -73,7 +81,9 @@ def build_marketing_graph(
     builder.add_edge("load_brand", "ideate")
     builder.add_edge("ideate", "choose_concept")
     builder.add_edge("choose_concept", "write_script")
-    builder.add_edge("write_script", "storyboard")  # M3 inserts human_review here
+    builder.add_edge("write_script", "human_review")  # HITL gate before expensive steps
+    # human_review returns Command(goto="storyboard" | "cancel") — edges inferred from its
+    # Command[Literal[...]] return annotation.
     builder.add_conditional_edges("storyboard", fan_out_shots, ["shot_prompt_worker"])
     builder.add_edge("shot_prompt_worker", "critique")  # fan-in
     builder.add_conditional_edges(
@@ -82,6 +92,7 @@ def build_marketing_graph(
     builder.add_edge("revise", "storyboard")  # evaluator-optimizer loop
     builder.add_edge("assemble", "render")
     builder.add_edge("render", END)
+    builder.add_edge("cancel", END)
 
     return builder.compile(checkpointer=checkpointer, store=store)
 
