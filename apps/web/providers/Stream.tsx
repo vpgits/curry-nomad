@@ -4,10 +4,28 @@ import { createContext, useContext, type ReactNode } from "react";
 import { useStream } from "@langchain/langgraph-sdk/react";
 import { useQueryState } from "nuqs";
 import { toast } from "sonner";
+import type { Message } from "@langchain/langgraph-sdk";
 
 import { API_URL, ASSISTANT_ID } from "@/lib/config";
+import { getContentString } from "@/lib/utils";
 import type { NoraState, NoraUpdate } from "@/lib/types";
+import { createClient } from "./client";
 import { useThreads } from "./Thread";
+
+// Aegra's /threads/search returns no state values, so we can't derive a title from messages at
+// list time. Instead, stamp the first user message onto the thread's metadata once, at creation,
+// and read it back in the history sidebar. (graph_id is re-sent so the search filter survives
+// whether Aegra merges or replaces metadata on update.)
+async function titleThread(id: string): Promise<void> {
+  const client = createClient(API_URL);
+  const state = await client.threads.getState(id);
+  const messages = (state.values as { messages?: Message[] } | undefined)?.messages ?? [];
+  const firstHuman = messages.find((m) => m?.type === "human");
+  const title = firstHuman ? getContentString(firstHuman.content).trim().slice(0, 100) : "";
+  if (title) {
+    await client.threads.update(id, { metadata: { graph_id: ASSISTANT_ID, title } });
+  }
+}
 
 // Instantiation expression (TS 4.7+): pin the generic hook to our state/update shape once.
 const useTypedStream = useStream<NoraState, { UpdateType: NoraUpdate }>;
@@ -31,8 +49,13 @@ export function StreamProvider({ children }: { children: ReactNode }) {
     fetchStateHistory: true,
     onThreadId: (id) => {
       setThreadId(id);
-      // A just-created thread isn't immediately searchable; refetch the list after a beat.
-      sleep().then(() => getThreads().then(setThreads).catch(console.error));
+      // A just-created thread isn't immediately searchable; after a beat, title it from its first
+      // message, then refetch the list so the new (titled) thread shows up.
+      sleep()
+        .then(() => titleThread(id))
+        .then(() => getThreads())
+        .then(setThreads)
+        .catch(console.error);
     },
     onError: (err) => {
       toast.error("Something went wrong", {

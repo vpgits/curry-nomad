@@ -80,15 +80,40 @@ def build_orchestrator(
     def analytics(state: OrchestratorState, config) -> dict:
         # Invoke the analytics subgraph with the running conversation; surface its final answer.
         result = analytics_graph.invoke({"messages": state["messages"]}, config)
-        final = result["messages"][-1]
-        # The subgraph's intermediate messages (the agent's run_sql/describe_table calls) don't
-        # reach the orchestrator's state — we only return the final answer. Surface those tool
-        # calls on the final message so the UI can show the agent's work (the SQL it ran).
-        trace = [
-            {"name": tc["name"], "args": tc["args"]}
-            for msg in result["messages"]
-            for tc in (getattr(msg, "tool_calls", None) or [])
-        ]
+        messages = result["messages"]
+        final = messages[-1]
+        # The subgraph's intermediate messages (the agent's describe_table/run_sql calls and their
+        # results) never reach the orchestrator's state — we only return the final answer. Distil
+        # them into a trace on the final message so the UI can show the agent's work. Each AIMessage
+        # that issued tool calls is one *step* (calls in the same message ran in parallel); steps
+        # run in sequence (each turn sees the previous results — including a SQL error it then
+        # repairs); each call is paired with its result (the matching ToolMessage) by id. Plain
+        # JSON, so it round-trips through the checkpointer's strict msgpack (see state.py).
+        results_by_id: dict[str, str] = {}
+        for msg in messages:
+            tool_call_id = getattr(msg, "tool_call_id", None)
+            if tool_call_id is not None:
+                content = msg.content
+                results_by_id[tool_call_id] = content if isinstance(content, str) else str(content)
+
+        trace: list[dict] = []
+        for msg in messages:
+            tool_calls = getattr(msg, "tool_calls", None)
+            if not tool_calls:
+                continue
+            trace.append(
+                {
+                    "calls": [
+                        {
+                            "name": tc["name"],
+                            "args": tc["args"],
+                            "result": results_by_id.get(tc.get("id", ""), ""),
+                        }
+                        for tc in tool_calls
+                    ]
+                }
+            )
+
         if trace:
             final.additional_kwargs = {**(final.additional_kwargs or {}), "tool_trace": trace}
         return {"messages": [final]}

@@ -38,17 +38,23 @@ export interface VideoBrief {
   product_facts_used: string[];
 }
 
-// One entry of the analytics agent's work — the run_sql / describe_table calls it made.
-// The orchestrator's `analytics` node folds these onto the final message's additional_kwargs
-// (the intermediate tool-calling messages never reach orchestrator state).
-export interface ToolTraceEntry {
+// One tool call the analytics agent made (describe_table / run_sql), paired with its result —
+// the matching ToolMessage content (query rows, schema, or a SQL error it then repairs).
+export interface ToolCallTrace {
   name: string;
   args: Record<string, unknown>;
+  result: string;
+}
+
+// One step of the agent loop: the calls issued together in a single AIMessage ran in parallel;
+// steps are ordered (each turn saw the previous results). Mirrors orchestrator.py's tool_trace.
+export interface ToolTraceStep {
+  calls: ToolCallTrace[];
 }
 
 // The custom payload the orchestrator stashes on its final AI message.
 export interface NoraAdditionalKwargs {
-  tool_trace?: ToolTraceEntry[];
+  tool_trace?: ToolTraceStep[];
   video_brief?: VideoBrief;
 }
 

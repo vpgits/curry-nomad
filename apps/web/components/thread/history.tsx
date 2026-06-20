@@ -3,18 +3,19 @@
 import { useEffect } from "react";
 import { useQueryState } from "nuqs";
 import { History, SquarePen } from "lucide-react";
-import type { Message, Thread } from "@langchain/langgraph-sdk";
+import type { Thread } from "@langchain/langgraph-sdk";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn, getContentString } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { useThreads } from "@/providers/Thread";
 
+// The title is stamped onto thread metadata at creation (StreamProvider.titleThread) — Aegra's
+// search doesn't return state values, so we can't read messages here.
 function threadTitle(thread: Thread): string {
-  const messages = (thread.values as { messages?: Message[] } | undefined)?.messages;
-  const firstHuman = messages?.find((m) => m?.type === "human");
-  const text = firstHuman ? getContentString(firstHuman.content) : "";
-  return text.trim() || "New conversation";
+  const meta = thread.metadata as { title?: unknown } | undefined;
+  const title = typeof meta?.title === "string" ? meta.title.trim() : "";
+  return title || "New conversation";
 }
 
 function byRecency(a: Thread, b: Thread): number {
