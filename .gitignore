@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Environments
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Tooling caches
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.langgraph_api/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# NOTE: src/nora/data/curry_nomad.db is intentionally committed (the bundled,
+# deterministic demo dataset). Do not add a blanket *.db / *.sqlite ignore.

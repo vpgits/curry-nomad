@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Curry Nomad · Agentic Workflows Case Study</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#100c09; --bg2:#16110c; --surface:#1c1611; --surface2:#241c15;
+    --line:rgba(255,236,210,.10); --line2:rgba(255,236,210,.18);
+    --text:#f6efe4; --muted:#b3a692; --faint:#7d7263;
+    --saffron:#f6a623; --amber:#ffc24d; --chili:#e2542c; --leaf:#7cc04a; --teal:#3fb6a6;
+    --glow-saffron:rgba(246,166,35,.28); --glow-chili:rgba(226,84,44,.22); --glow-leaf:rgba(124,192,74,.22);
+    --r:18px; --maxw:1180px;
+    --sans:'Inter',system-ui,sans-serif; --head:'Sora',system-ui,sans-serif; --mono:'JetBrains Mono',monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth;scroll-padding-top:84px}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+  body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+    background:
+      radial-gradient(60vw 50vh at 80% -5%, var(--glow-saffron), transparent 60%),
+      radial-gradient(50vw 40vh at 0% 30%, var(--glow-chili), transparent 55%),
+      radial-gradient(45vw 45vh at 100% 100%, var(--glow-leaf), transparent 55%);
+    opacity:.5}
+  a{color:inherit;text-decoration:none}
+  ::selection{background:var(--saffron);color:#1a1206}
+
+  /* progress + nav */
+  #progress{position:fixed;top:0;left:0;height:3px;width:0;z-index:60;
+    background:linear-gradient(90deg,var(--chili),var(--saffron),var(--leaf));box-shadow:0 0 12px var(--glow-saffron)}
+  nav{position:fixed;top:0;left:0;right:0;z-index:50;display:flex;align-items:center;gap:18px;
+    padding:14px clamp(16px,4vw,40px);backdrop-filter:blur(14px);
+    background:linear-gradient(180deg,rgba(16,12,9,.85),rgba(16,12,9,.4));border-bottom:1px solid var(--line)}
+  .brand{font-family:var(--head);font-weight:800;letter-spacing:-.02em;font-size:18px;display:flex;align-items:center;gap:9px}
+  .brand .dot{width:11px;height:11px;border-radius:50%;background:radial-gradient(circle at 35% 30%,var(--amber),var(--chili));box-shadow:0 0 12px var(--glow-saffron)}
+  .navlinks{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}
+  .navlinks a{font-size:12.5px;color:var(--muted);padding:7px 11px;border-radius:9px;transition:.2s;font-weight:500;white-space:nowrap}
+  .navlinks a:hover{color:var(--text);background:var(--surface)}
+  .navlinks a.active{color:var(--bg);background:var(--saffron);font-weight:600}
+  .navtoggle{display:none;margin-left:auto;background:var(--surface);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:8px 12px;font-size:13px;cursor:pointer}
+  @media(max-width:880px){
+    .navlinks{display:none;position:absolute;top:100%;left:0;right:0;flex-direction:column;background:var(--bg2);border-bottom:1px solid var(--line);padding:8px}
+    .navlinks.open{display:flex}
+    .navtoggle{display:block}
+  }
+
+  /* layout */
+  section{padding:clamp(64px,9vh,110px) clamp(16px,4vw,40px);max-width:var(--maxw);margin:0 auto}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:var(--saffron);margin-bottom:14px;display:flex;align-items:center;gap:10px}
+  .eyebrow::before{content:"";width:26px;height:1px;background:var(--saffron);display:inline-block;opacity:.7}
+  h2{font-family:var(--head);font-weight:700;letter-spacing:-.03em;font-size:clamp(28px,4.4vw,46px);line-height:1.08;margin-bottom:16px}
+  h3{font-family:var(--head);font-weight:600;letter-spacing:-.01em;font-size:19px;margin-bottom:8px}
+  .lead{font-size:clamp(16px,2vw,19px);color:var(--muted);max-width:62ch}
+  .grad{background:linear-gradient(120deg,var(--amber),var(--chili) 60%,var(--leaf));-webkit-background-clip:text;background-clip:text;color:transparent}
+
+  /* reveal */
+  .reveal{opacity:0;transform:translateY(22px);transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1)}
+  .reveal.in{opacity:1;transform:none}
+
+  /* cards / bento */
+  .card{background:linear-gradient(160deg,var(--surface),var(--bg2));border:1px solid var(--line);border-radius:var(--r);padding:22px;position:relative;overflow:hidden;transition:.25s}
+  .card:hover{border-color:var(--line2);transform:translateY(-4px)}
+  .bento{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
+  .bento .card{grid-column:span 4}
+  .span6{grid-column:span 6 !important}.span8{grid-column:span 8 !important}.span12{grid-column:span 12 !important}
+  @media(max-width:820px){.bento .card,.span6,.span8{grid-column:span 12 !important}}
+  .tag{font-family:var(--mono);font-size:11px;letter-spacing:.05em;color:var(--faint);text-transform:uppercase}
+  .ico{font-size:24px;display:inline-block;margin-bottom:10px;filter:saturate(1.2)}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-family:var(--mono);padding:5px 11px;border-radius:999px;border:1px solid var(--line2);color:var(--muted);background:var(--surface)}
+  .chips{display:flex;flex-wrap:wrap;gap:9px}
+
+  /* hero */
+  #hero{min-height:100vh;display:flex;flex-direction:column;justify-content:center;max-width:var(--maxw);padding-top:120px}
+  #hero h1{font-family:var(--head);font-weight:800;letter-spacing:-.04em;font-size:clamp(40px,8vw,84px);line-height:.98;margin:10px 0 20px}
+  .hero-sub{font-size:clamp(17px,2.3vw,22px);color:var(--muted);max-width:60ch;margin-bottom:30px}
+  .hero-flow{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:8px}
+  .hero-flow .node{padding:9px 15px;border-radius:11px;border:1px solid var(--line2);background:var(--surface);font-size:13.5px;font-weight:600}
+  .hero-flow .arr{color:var(--saffron);font-size:18px}
+  .statrow{display:flex;gap:34px;flex-wrap:wrap;margin-top:46px;padding-top:30px;border-top:1px solid var(--line)}
+  .stat .n{font-family:var(--head);font-weight:800;font-size:30px;letter-spacing:-.02em}
+  .stat .l{font-size:12.5px;color:var(--faint);font-family:var(--mono);text-transform:uppercase;letter-spacing:.08em}
+  .scrollcue{margin-top:48px;font-size:12px;color:var(--faint);font-family:var(--mono);letter-spacing:.15em;animation:bob 2s ease-in-out infinite}
+  @keyframes bob{50%{transform:translateY(6px)}}
+
+  /* demo stepper */
+  .stepper{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:26px 0 18px}
+  @media(max-width:760px){.stepper{grid-template-columns:repeat(2,1fr)}}
+  .step{cursor:pointer;border:1px solid var(--line);border-radius:13px;padding:14px;background:var(--surface);transition:.2s;position:relative}
+  .step:hover{border-color:var(--line2)}
+  .step.active{border-color:var(--saffron);background:linear-gradient(160deg,rgba(246,166,35,.14),var(--surface));box-shadow:0 0 0 1px var(--saffron) inset}
+  .step .k{font-family:var(--mono);font-size:11px;color:var(--saffron)}
+  .step .t{font-size:13.5px;font-weight:600;margin-top:4px}
+  .step .badge{font-size:10px;font-family:var(--mono);text-transform:uppercase;letter-spacing:.06em;padding:2px 7px;border-radius:6px;margin-top:8px;display:inline-block}
+  .b-agent{background:rgba(63,182,166,.16);color:var(--teal)}
+  .b-flow{background:rgba(226,84,44,.16);color:var(--chili)}
+  .b-route{background:rgba(246,166,35,.16);color:var(--saffron)}
+  .b-hitl{background:rgba(124,192,74,.16);color:var(--leaf)}
+  .stepdetail{border:1px solid var(--line);border-radius:14px;padding:20px 22px;background:var(--bg2);min-height:90px}
+  .stepdetail .who{font-family:var(--mono);font-size:12px;color:var(--saffron);margin-bottom:6px}
+  .playbtn{margin-top:6px;background:var(--surface);border:1px solid var(--line2);color:var(--text);border-radius:10px;padding:8px 16px;font-size:13px;cursor:pointer;font-weight:600;display:inline-flex;gap:8px;align-items:center}
+  .playbtn:hover{border-color:var(--saffron)}
+
+  /* architecture diagram */
+  .arch{display:grid;grid-template-columns:1.1fr 1fr 1fr;gap:14px;align-items:stretch}
+  @media(max-width:820px){.arch{grid-template-columns:1fr}}
+  .anode{cursor:pointer;border:1px solid var(--line);border-radius:14px;padding:18px;background:var(--surface);transition:.2s;text-align:left}
+  .anode:hover{transform:translateY(-3px);border-color:var(--line2)}
+  .anode.sel{border-color:var(--saffron);box-shadow:0 0 0 1px var(--saffron) inset}
+  .anode .h{font-family:var(--head);font-weight:600;font-size:15px;display:flex;align-items:center;gap:8px}
+  .anode .s{font-size:12.5px;color:var(--muted);margin-top:6px}
+  .archfull{grid-column:1/-1}
+  .archdetail{margin-top:14px;border:1px solid var(--line);border-radius:14px;padding:20px 22px;background:var(--bg2)}
+  .archdetail h4{font-family:var(--head);font-size:16px;margin-bottom:6px;color:var(--amber)}
+  .archdetail ul{margin:8px 0 0 18px;color:var(--muted);font-size:14px}
+  .archdetail li{margin:3px 0}
+
+  /* tabs */
+  .tabs{display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap}
+  .tab{cursor:pointer;border:1px solid var(--line);background:var(--surface);color:var(--muted);padding:11px 18px;border-radius:12px;font-weight:600;font-size:14px;transition:.2s;display:flex;align-items:center;gap:8px}
+  .tab.active{color:var(--text);border-color:var(--saffron);background:linear-gradient(160deg,rgba(246,166,35,.12),var(--surface))}
+  .tabpanel{display:none}.tabpanel.active{display:block;animation:fade .4s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  .flowline{display:flex;flex-direction:column;gap:8px}
+  .flowstep{display:flex;align-items:flex-start;gap:13px;padding:12px 15px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+  .flowstep .num{font-family:var(--mono);font-size:12px;color:var(--saffron);min-width:24px;padding-top:2px}
+  .flowstep .body{flex:1}
+  .flowstep .name{font-weight:600;font-size:14.5px}
+  .flowstep .desc{font-size:13px;color:var(--muted);margin-top:2px}
+  .flowstep.gate{border-color:rgba(124,192,74,.4);background:linear-gradient(160deg,rgba(124,192,74,.1),var(--surface))}
+  .flowstep.par{border-style:dashed}
+
+  /* eval split */
+  .evalgrid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.evalgrid{grid-template-columns:1fr}}
+  .bar{height:9px;border-radius:6px;background:var(--surface2);overflow:hidden;margin:6px 0}
+  .bar i{display:block;height:100%;border-radius:6px;width:0;transition:width 1.1s cubic-bezier(.2,.7,.2,1)}
+  .barlabel{display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted);font-family:var(--mono)}
+
+  /* timeline */
+  .timeline{position:relative;margin-left:8px;padding-left:26px;border-left:2px solid var(--line2)}
+  .tl{position:relative;padding:0 0 26px}
+  .tl::before{content:"";position:absolute;left:-34px;top:3px;width:13px;height:13px;border-radius:50%;background:var(--saffron);box-shadow:0 0 0 4px var(--bg),0 0 12px var(--glow-saffron)}
+  .tl.opt::before{background:var(--faint);box-shadow:0 0 0 4px var(--bg)}
+  .tl .m{font-family:var(--mono);font-size:12px;color:var(--saffron)}
+  .tl .ti{font-family:var(--head);font-weight:600;font-size:16px;margin:2px 0 3px}
+  .tl .d{font-size:13.5px;color:var(--muted)}
+
+  /* run of show */
+  .agenda{display:flex;flex-direction:column;gap:0}
+  .row{display:grid;grid-template-columns:120px 1fr;gap:18px;padding:15px 0;border-bottom:1px solid var(--line);align-items:baseline}
+  @media(max-width:600px){.row{grid-template-columns:90px 1fr;gap:12px}}
+  .row .time{font-family:var(--mono);font-size:13px;color:var(--amber)}
+  .row .seg{font-weight:600}
+  .row .det{font-size:13px;color:var(--muted);margin-top:2px}
+
+  /* before/after */
+  .toggle{display:inline-flex;border:1px solid var(--line2);border-radius:12px;overflow:hidden;margin-bottom:20px}
+  .toggle button{background:transparent;color:var(--muted);border:0;padding:10px 20px;font-weight:600;font-size:14px;cursor:pointer;font-family:var(--sans)}
+  .toggle button.on{color:var(--bg)}
+  .toggle button.on.bad{background:var(--chili)}
+  .toggle button.on.good{background:var(--leaf);color:#0d1408}
+  .ba-table{width:100%;border-collapse:collapse}
+  .ba-table td{padding:13px 14px;border-bottom:1px solid var(--line);font-size:14px;vertical-align:top}
+  .ba-table td:first-child{color:var(--muted);width:42%}
+  .ba-col{font-weight:600}
+  .ba.show-good .bad-val{display:none}.ba.show-bad .good-val{display:none}
+  .good-val{color:var(--leaf)}.bad-val{color:var(--chili)}
+
+  /* dataset */
+  .dbcard{font-family:var(--mono);font-size:12.5px}
+  .dbcard .tname{color:var(--amber);font-weight:500;font-size:14px;font-family:var(--head)}
+  .dbcard .col{color:var(--muted);padding:2px 0;border-bottom:1px dashed var(--line)}
+  .dbcard .col b{color:var(--text);font-weight:500}
+
+  /* close */
+  .ask{background:linear-gradient(160deg,rgba(246,166,35,.12),var(--surface));border:1px solid var(--line2);border-radius:var(--r);padding:26px 28px}
+  .ask ul{list-style:none;display:flex;flex-direction:column;gap:10px;margin-top:14px}
+  .ask li{display:flex;gap:11px;align-items:flex-start;font-size:15px}
+  .ask li .ck{color:var(--leaf);font-weight:700}
+  footer{max-width:var(--maxw);margin:0 auto;padding:40px;border-top:1px solid var(--line);color:var(--faint);font-size:13px;font-family:var(--mono);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  code{font-family:var(--mono);font-size:.92em;color:var(--amber);background:var(--surface2);padding:1px 6px;border-radius:5px}
+</style>
+</head>
+<body>
+<div id="progress"></div>
+
+<nav>
+  <div class="brand"><span class="dot"></span>Curry&nbsp;Nomad <span style="color:var(--faint);font-weight:500">· Case Study</span></div>
+  <button class="navtoggle" id="navtoggle">Menu</button>
+  <div class="navlinks" id="navlinks">
+    <a href="#hero" class="active">Overview</a>
+    <a href="#why">Why</a>
+    <a href="#concept">Concept</a>
+    <a href="#arch">Architecture</a>
+    <a href="#capabilities">Capabilities</a>
+    <a href="#patterns">Patterns</a>
+    <a href="#evals">Evaluation</a>
+    <a href="#data">Data</a>
+    <a href="#plan">Plan</a>
+    <a href="#agenda">Session</a>
+    <a href="#ask">The Ask</a>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section id="hero">
+  <div class="reveal in">
+    <div class="eyebrow">Internal engineering enablement · Hands-on</div>
+    <h1>Teaching engineers to build <span class="grad">agentic workflows</span> — properly.</h1>
+    <p class="hero-sub">A single, runnable LangGraph application — an AI assistant for a fictional Sri Lankan spice business — built as the reference codebase for a 90-minute hands-on session. It shows <b>both</b> paradigms in one place: an <b>agent</b> and a <b>workflow</b>, under one orchestrator, with the production-grade plumbing most demos skip.</p>
+    <div class="hero-flow">
+      <span class="node">Ask a data question</span><span class="arr">→</span>
+      <span class="node">Analytics agent (SQL + self-correct)</span><span class="arr">→</span>
+      <span class="node">"Make a video ad for it"</span><span class="arr">→</span>
+      <span class="node">Marketing workflow</span>
+    </div>
+    <div class="statrow">
+      <div class="stat"><div class="n">2</div><div class="l">paradigms · 1 app</div></div>
+      <div class="stat"><div class="n">10+</div><div class="l">patterns shown</div></div>
+      <div class="stat"><div class="n">90</div><div class="l">minute session</div></div>
+      <div class="stat"><div class="n">0</div><div class="l">external setup</div></div>
+    </div>
+    <div class="scrollcue">↓ SCROLL</div>
+  </div>
+</section>
+
+<!-- WHY -->
+<section id="why">
+  <div class="reveal">
+    <div class="eyebrow">Why this, why now</div>
+    <h2>Most "agent demos" teach the wrong half.</h2>
+    <p class="lead">They wire up a chatbot and a tool call, then stop — skipping the things that actually separate a toy from a system: when to use an agent vs. a workflow, how to evaluate non-deterministic output, and how to see what the agent is doing. This case study leads with exactly those.</p>
+  </div>
+  <div class="bento" style="margin-top:30px">
+    <div class="card reveal"><span class="ico">🎯</span><h3>One codebase, both paradigms</h3><p class="tag">THE CORE LESSON</p><p style="color:var(--muted);margin-top:10px;font-size:14.5px">Engineers leave knowing <b>when to reach for an agent</b> (open-ended, self-correcting) and <b>when a workflow</b> (predictable, multi-step) — because they see both side by side.</p></div>
+    <div class="card reveal"><span class="ico">📊</span><h3>Evaluation that's actually possible</h3><p class="tag">USUALLY MISSING</p><p style="color:var(--muted);margin-top:10px;font-size:14.5px">Two eval styles taught in contrast: <b>deterministic ground-truth</b> for the data agent, <b>LLM-as-judge + guardrails</b> for the creative workflow. Run live.</p></div>
+    <div class="card reveal"><span class="ico">🔭</span><h3>Observability, not <code>print()</code></h3><p class="tag">PRODUCTION HABIT</p><p style="color:var(--muted);margin-top:10px;font-size:14.5px">Structured logs + traces across the agent loop and the workflow steps. Debugging agents <i>is</i> reading traces — we teach that.</p></div>
+    <div class="card reveal span6"><span class="ico">🧰</span><h3>A reusable internal asset</h3><p style="color:var(--muted);margin-top:10px;font-size:14.5px">Not throwaway. A clean reference repo + the session can be re-run for every new cohort, and the architecture is the template for real internal tools.</p></div>
+    <div class="card reveal span6"><span class="ico">🛡️</span><h3>Safe & zero-setup</h3><p style="color:var(--muted);margin-top:10px;font-size:14.5px">Runs on any laptop with one LLM key. Deterministic fakes by default — no Google account, no real spend, no side effects, no demo-gods.</p></div>
+  </div>
+</section>
+
+<!-- CONCEPT -->
+<section id="concept">
+  <div class="reveal">
+    <div class="eyebrow">The concept</div>
+    <h2>Meet <span class="grad">Nora</span> — operations assistant for Curry Nomad.</h2>
+    <p class="lead">Curry Nomad is a (fictional) Sri Lankan spice business. Nora does two very different jobs, and an orchestrator routes between them. Click through the canonical demo flow:</p>
+  </div>
+  <div class="reveal">
+    <div class="stepper" id="stepper"></div>
+    <div class="stepdetail" id="stepdetail"></div>
+    <button class="playbtn" id="playbtn">▶ Play the demo flow</button>
+  </div>
+</section>
+
+<!-- ARCHITECTURE -->
+<section id="arch">
+  <div class="reveal">
+    <div class="eyebrow">Architecture</div>
+    <h2>One orchestrator, two capabilities, shared foundations.</h2>
+    <p class="lead">Click any block to see what lives inside it and what it teaches.</p>
+  </div>
+  <div class="reveal" style="margin-top:26px">
+    <div class="arch">
+      <button class="anode archfull sel" data-node="orch"><div class="h">🧭 Orchestrator <span class="badge b-route" style="font-size:10px;padding:2px 7px;border-radius:6px">ROUTING</span></div><div class="s">Classifies each request and dispatches to the right capability.</div></button>
+      <button class="anode" data-node="analytics"><div class="h">🤖 Analytics <span class="badge b-agent">AGENT</span></div><div class="s">NL → SQL → run → self-correct → answer.</div></button>
+      <button class="anode" data-node="marketing"><div class="h">🎬 Marketing <span class="badge b-flow">WORKFLOW</span></div><div class="s">Multi-step pipeline → video creative brief.</div></button>
+      <button class="anode" data-node="shared"><div class="h">🧱 Shared layers</div><div class="s">Memory · HITL · Observability · Evals.</div></button>
+      <div class="archdetail archfull" id="archdetail"></div>
+    </div>
+  </div>
+</section>
+
+<!-- CAPABILITIES -->
+<section id="capabilities">
+  <div class="reveal">
+    <div class="eyebrow">The two capabilities</div>
+    <h2>Agent vs. workflow — shown, not asserted.</h2>
+  </div>
+  <div class="reveal" style="margin-top:22px">
+    <div class="tabs">
+      <button class="tab active" data-tab="ag">🤖 Analytics — the Agent</button>
+      <button class="tab" data-tab="wf">🎬 Marketing — the Workflow</button>
+    </div>
+
+    <div class="tabpanel active" id="ag">
+      <div class="bento">
+        <div class="card span8">
+          <p class="tag">PATTERN · AGENTIC LOOP WITH SELF-CORRECTION</p>
+          <h3 style="margin-top:8px">The model decides the path.</h3>
+          <p style="color:var(--muted);font-size:14.5px;margin-bottom:14px">Open-ended questions over the business DB. The agent inspects the schema, writes SQL, runs it — and when a query fails, it <b>reads the error and repairs it</b>. This loop is the safe, reproducible answer to "why agents?".</p>
+          <div class="flowline">
+            <div class="flowstep"><span class="num">01</span><div class="body"><div class="name">agent (LLM + tools)</div><div class="desc">Reasons about the question, picks a tool.</div></div></div>
+            <div class="flowstep"><span class="num">02</span><div class="body"><div class="name">tools: list_tables · describe_table · run_sql</div><div class="desc">Read-only by design — SELECT-only, enforced LIMIT, timeout.</div></div></div>
+            <div class="flowstep gate"><span class="num">↻</span><div class="body"><div class="name">self-correct on error</div><div class="desc">run_sql returns the DB error as a tool result → the model fixes the query and retries.</div></div></div>
+            <div class="flowstep"><span class="num">03</span><div class="body"><div class="name">answer</div><div class="desc">Interprets rows, applies remembered metric definitions, replies.</div></div></div>
+          </div>
+        </div>
+        <div class="card span4">
+          <p class="tag">GATE BY RISK</p>
+          <h3 style="margin-top:8px">No approval here.</h3>
+          <p style="color:var(--muted);font-size:14px;margin-top:8px">Reads are safe, so they're <b>not</b> gated. That's the lesson: gate by risk, not reflexively. HITL lives where it matters — the workflow.</p>
+          <div style="margin-top:16px" class="chips">
+            <span class="pill">SQLite</span><span class="pill">ToolNode</span><span class="pill">conditional edges</span><span class="pill">ground-truth evals</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tabpanel" id="wf">
+      <div class="bento">
+        <div class="card span8">
+          <p class="tag">PATTERN · CHAINING · EVALUATOR-OPTIMIZER · PARALLELIZATION</p>
+          <h3 style="margin-top:8px">A predictable pipeline → a video-ad creative brief.</h3>
+          <p style="color:var(--muted);font-size:14.5px;margin-bottom:14px">Grounded in the chosen product's real data. Produces a structured <code>VideoBrief</code>: concept, 30s script, shot list, and per-scene text-to-video prompts.</p>
+          <div class="flowline">
+            <div class="flowstep"><span class="num">01</span><div class="body"><div class="name">fetch_product</div><div class="desc">Pull facts from SQLite (origin, price, category).</div></div></div>
+            <div class="flowstep par"><span class="num">02</span><div class="body"><div class="name">ideate_concepts ∥</div><div class="desc">2–3 concept options generated in parallel.</div></div></div>
+            <div class="flowstep"><span class="num">03</span><div class="body"><div class="name">write_script</div><div class="desc">Compose a ~30s script with timed beats.</div></div></div>
+            <div class="flowstep gate"><span class="num">⏸</span><div class="body"><div class="name">human review (interrupt) — HITL</div><div class="desc">Approve or edit the script <b>before</b> compute is spent on shots/render.</div></div></div>
+            <div class="flowstep par"><span class="num">04</span><div class="body"><div class="name">storyboard → shot_prompts ∥</div><div class="desc">Break into shots; per-shot text-to-video prompts in parallel.</div></div></div>
+            <div class="flowstep"><span class="num">05</span><div class="body"><div class="name">critique → revise ↻</div><div class="desc">Evaluator checks brand voice + platform rules (hook in 3s, CTA, duration); optimizer revises until it passes.</div></div></div>
+            <div class="flowstep"><span class="num">06</span><div class="body"><div class="name">assemble VideoBrief · [render adapter]</div><div class="desc">Structured output. Rendering is an optional swap — fake by default.</div></div></div>
+          </div>
+        </div>
+        <div class="card span4">
+          <p class="tag">HITL AS A CHECKPOINT</p>
+          <h3 style="margin-top:8px">Review mid-pipeline.</h3>
+          <p style="color:var(--muted);font-size:14px;margin-top:8px">Not a final "are you sure?" — a real <b>review gate inside the flow</b>, the most common production HITL shape.</p>
+          <div style="margin-top:16px" class="chips">
+            <span class="pill">prompt chaining</span><span class="pill">evaluator-optimizer</span><span class="pill">parallel</span><span class="pill">structured output</span><span class="pill">LLM-judge evals</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PATTERNS -->
+<section id="patterns">
+  <div class="reveal">
+    <div class="eyebrow">The pattern catalog</div>
+    <h2>Essentially the whole curriculum — in one app.</h2>
+    <p class="lead">Every important agentic pattern has a concrete home in the code.</p>
+  </div>
+  <div class="bento" id="patterngrid" style="margin-top:28px"></div>
+</section>
+
+<!-- EVALS -->
+<section id="evals">
+  <div class="reveal">
+    <div class="eyebrow">The headline · Evaluation</div>
+    <h2>Two kinds of evaluation, taught in contrast.</h2>
+    <p class="lead">Most demos can only show one. Because we own the data <i>and</i> generate creative output, we show both — and run them live.</p>
+  </div>
+  <div class="evalgrid reveal" style="margin-top:26px">
+    <div class="card">
+      <span class="badge b-agent" style="padding:4px 9px;border-radius:7px">ANALYTICS</span>
+      <h3 style="margin-top:12px">Deterministic · ground truth</h3>
+      <p style="color:var(--muted);font-size:14px;margin:8px 0 16px">Compute the true answer straight from the DB and check the agent automatically. Includes an injected-error scenario to measure recovery.</p>
+      <div class="barlabel"><span>Answer accuracy</span><span data-v="92">92%</span></div><div class="bar"><i style="background:var(--teal)" data-w="92"></i></div>
+      <div class="barlabel"><span>SQL validity</span><span data-v="100">100%</span></div><div class="bar"><i style="background:var(--teal)" data-w="100"></i></div>
+      <div class="barlabel"><span>Error-recovery rate</span><span data-v="88">88%</span></div><div class="bar"><i style="background:var(--teal)" data-w="88"></i></div>
+      <p class="tag" style="margin-top:14px">numeric/exact match · sql validity · recovery · avg tool calls</p>
+    </div>
+    <div class="card">
+      <span class="badge b-flow" style="padding:4px 9px;border-radius:7px">MARKETING</span>
+      <h3 style="margin-top:12px">LLM-as-judge + guardrails</h3>
+      <p style="color:var(--muted);font-size:14px;margin:8px 0 16px">No single right answer — grade against a brand-voice rubric, backed by hard deterministic checks.</p>
+      <div class="barlabel"><span>Guardrails pass-rate</span><span data-v="96">96%</span></div><div class="bar"><i style="background:var(--chili)" data-w="96"></i></div>
+      <div class="barlabel"><span>Brand-voice (judge, 1–5)</span><span data-v="84">4.2</span></div><div class="bar"><i style="background:var(--chili)" data-w="84"></i></div>
+      <div class="barlabel"><span>Uses correct product facts</span><span data-v="100">100%</span></div><div class="bar"><i style="background:var(--chili)" data-w="100"></i></div>
+      <p class="tag" style="margin-top:14px">duration · hook+CTA present · product facts · no banned claims · rubric score</p>
+    </div>
+  </div>
+  <p style="color:var(--faint);font-size:12.5px;margin-top:14px;font-family:var(--mono)">* illustrative target metrics — the runner is offline-capable and also plugs into LangSmith.</p>
+</section>
+
+<!-- DATA -->
+<section id="data">
+  <div class="reveal">
+    <div class="eyebrow">The dataset</div>
+    <h2>A synthetic Sri Lankan spice business.</h2>
+    <p class="lead">Bundled SQLite, all in LKR, ~12 months of orders — enough for real analytics, and real product facts to ground the marketing.</p>
+  </div>
+  <div class="bento" style="margin-top:26px">
+    <div class="card dbcard reveal"><div class="tname">products</div><div class="col"><b>name</b> · category · origin</div><div class="col"><b>grams</b> · unit_price_lkr</div><div class="col">sku · active</div><p class="tag" style="margin-top:10px">Ceylon cinnamon, cardamom, curry blends…</p></div>
+    <div class="card dbcard reveal"><div class="tname">customers</div><div class="col"><b>name</b> · city</div><div class="col"><b>segment</b> (local / export)</div><div class="col">created_at</div><p class="tag" style="margin-top:10px">Colombo, Kandy, Galle, Jaffna…</p></div>
+    <div class="card dbcard reveal"><div class="tname">orders</div><div class="col"><b>customer_id</b> · order_date</div><div class="col">status · channel</div><p class="tag" style="margin-top:10px">12 months of history</p></div>
+    <div class="card dbcard reveal"><div class="tname">order_items</div><div class="col"><b>order_id</b> · product_id</div><div class="col">quantity · unit_price_lkr</div></div>
+    <div class="card dbcard reveal"><div class="tname">refunds</div><div class="col"><b>order_id</b> · amount_lkr</div><div class="col">reason · refund_date</div><p class="tag" style="margin-top:10px">powers "refund rate" questions</p></div>
+    <div class="card reveal" style="display:flex;flex-direction:column;justify-content:center">
+      <h3>Why synthetic?</h3>
+      <p style="color:var(--muted);font-size:14px;margin-top:8px">Owning the data is what makes <b>deterministic evals</b> possible — and it ships with the repo, so every cohort runs it instantly.</p>
+    </div>
+  </div>
+</section>
+
+<!-- PLAN / MILESTONES -->
+<section id="plan">
+  <div class="reveal">
+    <div class="eyebrow">Build plan</div>
+    <h2>Milestones — each leaves the repo runnable.</h2>
+    <p class="lead">The build order doubles as the demo's progression.</p>
+  </div>
+  <div class="timeline reveal" style="margin-top:30px">
+    <div class="tl"><div class="m">M0</div><div class="ti">Scaffold</div><div class="d">Project, config, observability, services + fakes, and the Sri Lankan SQLite seed.</div></div>
+    <div class="tl"><div class="m">M1</div><div class="ti">Analytics agent</div><div class="d">Read tools + the agent loop + self-correction. Runnable Q&A on the DB.</div></div>
+    <div class="tl"><div class="m">M2</div><div class="ti">Marketing workflow</div><div class="d">Chaining + parallel concepts/shots + evaluator-optimizer + the VideoBrief.</div></div>
+    <div class="tl"><div class="m">M3</div><div class="ti">HITL + memory</div><div class="d">Mid-workflow review (interrupt), checkpointer, semantic Store wired into both.</div></div>
+    <div class="tl"><div class="m">M4</div><div class="ti">Orchestrator</div><div class="d">Router ties both capabilities into one entrypoint — the demo flow works end to end.</div></div>
+    <div class="tl"><div class="m">M5</div><div class="ti">Evals</div><div class="d">Deterministic analytics evals + LLM-judge marketing evals + a local runner.</div></div>
+    <div class="tl"><div class="m">M6</div><div class="ti">Tests + docs + polish</div><div class="d">pytest suite, README/teaching map, prompt cleanup, lint clean.</div></div>
+    <div class="tl opt"><div class="m">M7 · optional</div><div class="ti">Real adapters</div><div class="d">Swap a real text-to-video renderer / real data source — the "production I/O" coda.</div></div>
+  </div>
+</section>
+
+<!-- AGENDA -->
+<section id="agenda">
+  <div class="reveal">
+    <div class="eyebrow">The 90-minute session</div>
+    <h2>Run-of-show.</h2>
+    <p class="lead">Each segment maps to a self-contained, runnable checkpoint in the code.</p>
+  </div>
+  <div class="agenda reveal" style="margin-top:24px">
+    <div class="row"><span class="time">0:00–0:12</span><div><div class="seg">Framing: workflow vs. agent</div><div class="det">Both paradigms live in this one app; when to use which.</div></div></div>
+    <div class="row"><span class="time">0:12–0:35</span><div><div class="seg">Analytics — the agent</div><div class="det">The tool loop; self-correction on a bad query. <i>Why agents.</i></div></div></div>
+    <div class="row"><span class="time">0:35–0:55</span><div><div class="seg">Marketing — the workflow</div><div class="det">Chaining, parallel concepts/shots, evaluator-optimizer.</div></div></div>
+    <div class="row"><span class="time">0:55–1:05</span><div><div class="seg">Orchestrator + HITL + memory</div><div class="det">Routing, the script-review interrupt, brand voice shaping both.</div></div></div>
+    <div class="row"><span class="time">1:05–1:25</span><div><div class="seg">Observability + evals — live</div><div class="det">Open a trace; run both eval suites and read the metrics.</div></div></div>
+    <div class="row"><span class="time">1:25–1:30</span><div><div class="seg">Extensibility + before/after + Q&A</div><div class="det">How to add a capability; quick diff vs. the naive version.</div></div></div>
+  </div>
+</section>
+
+<!-- BEFORE / AFTER -->
+<section id="beforeafter">
+  <div class="reveal">
+    <div class="eyebrow">Teaching gold · Before / after</div>
+    <h2>Every best practice is motivated by a real bug.</h2>
+    <p class="lead">There's a genuine "naive" agentic app in this repo. The rewrite fixes it — and the contrast is the lesson. Toggle:</p>
+  </div>
+  <div class="reveal" style="margin-top:22px">
+    <div class="toggle">
+      <button id="btnBad" class="on bad">😬 Naive version</button>
+      <button id="btnGood">✨ The rewrite</button>
+    </div>
+    <div class="ba show-bad" id="ba">
+      <table class="ba-table"><tbody>
+        <tr><td>Logging</td><td class="ba-col"><span class="bad-val">print() scattered everywhere</span><span class="good-val">structured logs + traces</span></td></tr>
+        <tr><td>Evaluation</td><td class="ba-col"><span class="bad-val">none at all</span><span class="good-val">dual eval harness, run live</span></td></tr>
+        <tr><td>Memory</td><td class="ba-col"><span class="bad-val">store built but never wired into the graph; two embedding systems that never connect</span><span class="good-val">checkpointer + semantic Store, actually used</span></td></tr>
+        <tr><td>Human-in-the-loop</td><td class="ba-col"><span class="bad-val">decorative approval cards with dead buttons</span><span class="good-val">one clean interrupt() path</span></td></tr>
+        <tr><td>Side effects</td><td class="ba-col"><span class="bad-val">some writes gated, others not — inconsistent</span><span class="good-val">gate by risk, uniformly</span></td></tr>
+        <tr><td>Reliability</td><td class="ba-col"><span class="bad-val">rate limiter reset every call; bare excepts swallow errors; "now" frozen at import</span><span class="good-val">retries, typed errors, fresh config</span></td></tr>
+        <tr><td>Secrets</td><td class="ba-col"><span class="bad-val">credentials + live token committed to the repo</span><span class="good-val">env only, never committed</span></td></tr>
+        <tr><td>Structure</td><td class="ba-col"><span class="bad-val">over-decomposed sub-agents for simple jobs</span><span class="good-val">agent vs. workflow, by need</span></td></tr>
+      </tbody></table>
+    </div>
+  </div>
+</section>
+
+<!-- TECH -->
+<section id="tech">
+  <div class="reveal">
+    <div class="eyebrow">Stack</div>
+    <h2>Built on what we already know.</h2>
+    <p class="lead">LangChain &amp; LangGraph, extended with best practices. Provider-agnostic model layer.</p>
+    <div class="chips" style="margin-top:22px">
+      <span class="pill">LangGraph 1.x</span><span class="pill">LangChain 1.x</span><span class="pill">Python 3.12 · uv</span>
+      <span class="pill">init_chat_model (any provider)</span><span class="pill">Pydantic / pydantic-settings</span>
+      <span class="pill">structlog</span><span class="pill">LangSmith</span><span class="pill">tenacity</span>
+      <span class="pill">SQLite</span><span class="pill">pytest</span><span class="pill">ruff</span>
+    </div>
+  </div>
+</section>
+
+<!-- ASK -->
+<section id="ask">
+  <div class="reveal">
+    <div class="eyebrow">The ask</div>
+    <h2>What I need to proceed.</h2>
+    <div class="ask" style="margin-top:18px">
+      <h3>Approval to build the case study as scoped above.</h3>
+      <p style="color:var(--muted);margin-top:6px;font-size:15px">Concretely, sign-off on:</p>
+      <ul>
+        <li><span class="ck">✓</span><div><b>The concept</b> — Curry Nomad assistant: one agent + one workflow under an orchestrator.</div></li>
+        <li><span class="ck">✓</span><div><b>The scope</b> — one excellent example of each pattern, not a product. Fakes by default; no real accounts or spend.</div></li>
+        <li><span class="ck">✓</span><div><b>The outcome</b> — a reusable internal training repo + a 90-minute hands-on session, re-runnable per cohort.</div></li>
+        <li><span class="ck">✓</span><div><b>Build effort</b> — the M0–M6 milestone plan; M7 (real adapters) optional.</div></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <span>Curry Nomad · Agentic Workflows Case Study</span>
+  <span>Internal engineering enablement · v1 plan</span>
+</footer>
+
+<script>
+  /* ---------- data ---------- */
+  const STEPS = [
+    {k:"01", t:"User asks a data question", badge:["ROUTE","b-route"], who:"Orchestrator", d:"“What’s our best-selling product in Colombo this quarter?” The router classifies it as a data question and dispatches to the analytics agent."},
+    {k:"02", t:"Agent queries + self-corrects", badge:["AGENT","b-agent"], who:"Analytics agent", d:"It inspects the schema, writes SQL, runs it. A first query errors — it reads the DB error, fixes the query, retries, and returns the answer (e.g. Ceylon Cinnamon)."},
+    {k:"03", t:"User: “make a video ad for it”", badge:["ROUTE","b-route"], who:"Orchestrator", d:"The router recognises a content request and hands off to the marketing workflow, carrying the product chosen above."},
+    {k:"04", t:"Workflow drafts — human reviews", badge:["HITL","b-hitl"], who:"Marketing workflow", d:"It pulls the product’s real facts, ideates concepts in parallel, writes a 30s script — then pauses for you to approve or edit before spending compute on shots."},
+    {k:"05", t:"Finished creative brief", badge:["FLOW","b-flow"], who:"Marketing workflow", d:"Storyboard + per-scene text-to-video prompts generated in parallel, critiqued against brand voice, revised, and assembled into a structured VideoBrief."}
+  ];
+  const ARCH = {
+    orch:{title:"🧭 Orchestrator · routing",d:"A small router graph classifies the request and dispatches it. Ambiguous → ask a clarifying question.",li:["Structured-output classifier on a cheap model tier","Clean example of the routing pattern","Uses a small model for a small job"]},
+    analytics:{title:"🤖 Analytics · the agent",d:"An augmented LLM in a tool loop with self-correction — the safe, reproducible case for ‘why agents’.",li:["Tools: list_tables · describe_table · run_sql (SELECT-only, LIMIT, timeout)","ToolNode + conditional edges loop until done","Recovers from a failed query by reading the error and repairing"]},
+    marketing:{title:"🎬 Marketing · the workflow",d:"A deterministic multi-step pipeline producing a structured video creative brief, grounded in product data.",li:["Prompt chaining + parallel concepts/shot-prompts","Evaluator-optimizer against brand voice + platform rules","HITL script review; optional render adapter (fake by default)"]},
+    shared:{title:"🧱 Shared foundations",d:"The cross-cutting layers used by both capabilities — the production-grade plumbing.",li:["Memory: checkpointer (short-term) + semantic Store (long-term)","One HITL interrupt() mechanism","Observability: structlog + LangSmith tracing","Evaluation: deterministic + LLM-as-judge"]}
+  };
+  const PATTERNS = [
+    ["🧭","Routing","orchestrator: analytics vs. marketing","b-route"],
+    ["🔁","Agent loop + reflection","analytics: SQL → error → repair → retry","b-agent"],
+    ["🔗","Prompt chaining","marketing: gather → ideate → script → storyboard","b-flow"],
+    ["⚖️","Evaluator-optimizer","marketing: critique → revise until it passes","b-flow"],
+    ["⚡","Parallelization","marketing: concept options & shot prompts","b-flow"],
+    ["🧰","Tools & gating by risk","read tools (no gate) vs. costly step (gate)","b-agent"],
+    ["⏸️","Human-in-the-loop","marketing: mid-pipeline script review","b-hitl"],
+    ["🧠","Memory (short + long)","checkpointer + semantic Store, both capabilities","b-route"],
+    ["🔭","Observability","traces + structured logs across loop & steps","b-agent"],
+    ["📊","Evaluation (two kinds)","deterministic + LLM-judge","b-flow"]
+  ];
+
+  /* ---------- stepper ---------- */
+  const stepperEl=document.getElementById('stepper'), detailEl=document.getElementById('stepdetail');
+  let cur=0, timer=null;
+  STEPS.forEach((s,i)=>{
+    const d=document.createElement('div'); d.className='step'+(i===0?' active':'');
+    d.innerHTML=`<div class="k">STEP ${s.k}</div><div class="t">${s.t}</div><span class="badge ${s.badge[1]}">${s.badge[0]}</span>`;
+    d.onclick=()=>{stop();select(i)}; stepperEl.appendChild(d);
+  });
+  function select(i){cur=i;[...stepperEl.children].forEach((c,j)=>c.classList.toggle('active',j===i));
+    const s=STEPS[i];detailEl.innerHTML=`<div class="who">${s.who}</div><div>${s.d}</div>`}
+  function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('playbtn').textContent='▶ Play the demo flow'}}
+  document.getElementById('playbtn').onclick=function(){
+    if(timer){stop();return}
+    this.textContent='⏸ Pause'; select((cur+1)%STEPS.length);
+    timer=setInterval(()=>select((cur+1)%STEPS.length),2600);
+  };
+  select(0);
+
+  /* ---------- architecture ---------- */
+  const adEl=document.getElementById('archdetail');
+  function showArch(node){const a=ARCH[node];adEl.innerHTML=`<h4>${a.title}</h4><p style="color:var(--muted);font-size:14px">${a.d}</p><ul>${a.li.map(x=>`<li>${x}</li>`).join('')}</ul>`}
+  document.querySelectorAll('.anode').forEach(b=>b.onclick=()=>{
+    document.querySelectorAll('.anode').forEach(x=>x.classList.remove('sel'));
+    b.classList.add('sel');showArch(b.dataset.node);
+  });
+  showArch('orch');
+
+  /* ---------- tabs ---------- */
+  document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.tabpanel').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');document.getElementById(t.dataset.tab).classList.add('active');
+  });
+
+  /* ---------- patterns grid ---------- */
+  const pg=document.getElementById('patterngrid');
+  PATTERNS.forEach(p=>{const c=document.createElement('div');c.className='card reveal';
+    c.innerHTML=`<span class="ico">${p[0]}</span><h3 style="font-size:16px">${p[1]}</h3><p class="tag" style="margin-top:6px;color:var(--muted)">${p[2]}</p><span class="badge ${p[3]}" style="margin-top:12px;display:inline-block">${({'b-route':'ROUTING','b-agent':'AGENT','b-flow':'WORKFLOW','b-hitl':'HITL'})[p[3]]}</span>`;
+    pg.appendChild(c)});
+
+  /* ---------- before/after toggle ---------- */
+  const ba=document.getElementById('ba'),bb=document.getElementById('btnBad'),bg=document.getElementById('btnGood');
+  bb.onclick=()=>{ba.className='ba show-bad';bb.classList.add('on','bad');bg.classList.remove('on','good')};
+  bg.onclick=()=>{ba.className='ba show-good';bg.classList.add('on','good');bb.classList.remove('on','bad')};
+
+  /* ---------- reveal + scrollspy + bars ---------- */
+  const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}),{threshold:.12});
+  document.querySelectorAll('.reveal').forEach(e=>io.observe(e));
+
+  const barIo=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.querySelectorAll('.bar i').forEach(i=>i.style.width=i.dataset.w+'%');barIo.unobserve(e.target)}}),{threshold:.3});
+  document.querySelectorAll('#evals .card').forEach(c=>barIo.observe(c));
+
+  const links=[...document.querySelectorAll('.navlinks a')];
+  const secs=links.map(l=>document.querySelector(l.getAttribute('href')));
+  const spy=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){const id='#'+e.target.id;links.forEach(l=>l.classList.toggle('active',l.getAttribute('href')===id))}}),{rootMargin:'-45% 0px -50% 0px'});
+  secs.forEach(s=>s&&spy.observe(s));
+
+  addEventListener('scroll',()=>{const h=document.documentElement;const p=h.scrollTop/(h.scrollHeight-h.clientHeight)*100;document.getElementById('progress').style.width=p+'%'},{passive:true});
+
+  /* ---------- mobile nav ---------- */
+  document.getElementById('navtoggle').onclick=()=>document.getElementById('navlinks').classList.toggle('open');
+  document.querySelectorAll('.navlinks a').forEach(a=>a.onclick=()=>document.getElementById('navlinks').classList.remove('open'));
+</script>
+</body>
+</html>
