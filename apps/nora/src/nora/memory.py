@@ -16,9 +16,19 @@ from __future__ import annotations
 
 from langchain.embeddings import init_embeddings
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.store.memory import InMemoryStore
 
 from nora.config import Settings
+from nora.schemas import (
+    ConceptIdea,
+    Critique,
+    RouteDecision,
+    ScriptBeat,
+    Shot,
+    ShotPrompt,
+    VideoBrief,
+)
 
 # Namespaces are tuples of strings (folder-like). Cross-thread / persistent.
 BRAND = ("curry_nomad", "brand")
@@ -37,9 +47,22 @@ def build_store(settings: Settings) -> InMemoryStore:
     )
 
 
+# Our structured-output schemas. Graph state stores their `.model_dump()` dicts (see
+# nora/state.py), so the checkpointer normally never sees these types. This allow-list is
+# belt-and-suspenders for the CLI path: if a Pydantic value ever reaches the checkpointer
+# (now, or via a future change), it still round-trips as the real model — even under
+# `LANGGRAPH_STRICT_MSGPACK=true`, where unregistered types silently degrade to bare dicts.
+# NOTE: this only covers the checkpointer *we* construct. On the platform path (Aegra /
+# `langgraph dev`) the server builds its own serializer, so the JSON-native-state design in
+# nora/state.py — not this list — is what keeps persistence portable there.
+_NORA_MSGPACK_SCHEMAS = [
+    RouteDecision, ConceptIdea, ScriptBeat, Shot, ShotPrompt, Critique, VideoBrief,
+]
+
+
 def build_checkpointer() -> InMemorySaver:
     """Build the short-term checkpointer. Required for HITL interrupts + resume."""
-    return InMemorySaver()
+    return InMemorySaver(serde=JsonPlusSerializer(allowed_msgpack_modules=_NORA_MSGPACK_SCHEMAS))
 
 
 # The seed knowledge. Kept as data so the demo can point at exactly what shapes behavior.

@@ -44,7 +44,7 @@ def test_data_question_routes_to_analytics():
         checkpointer=InMemorySaver(),
     )
     result = orch.invoke({"messages": [HumanMessage("what's our top product?")]}, _cfg("a1"))
-    assert result["route"].capability == "analytics"
+    assert result["route"]["capability"] == "analytics"
     assert "Ceylon Cinnamon" in result["messages"][-1].content
 
 
@@ -58,7 +58,7 @@ def test_marketing_request_routes_and_carries_product_hint():
         checkpointer=InMemorySaver(),
     )
     result = orch.invoke({"messages": [HumanMessage("make a 30s reel for it")]}, _cfg("m1"))
-    assert result["route"].capability == "marketing"
+    assert result["route"]["capability"] == "marketing"
     # product_hint flowed into the marketing run and grounded the brief in that product.
     brief = result["messages"][-1].additional_kwargs["video_brief"]
     assert "Roasted Curry Powder" in brief["product_name"]
@@ -72,7 +72,7 @@ def test_ambiguous_request_routes_to_clarify():
         checkpointer=InMemorySaver(),
     )
     result = orch.invoke({"messages": [HumanMessage("hey there")]}, _cfg("c1"))
-    assert result["route"].capability == "clarify"
+    assert result["route"]["capability"] == "clarify"
     assert "which would you like" in result["messages"][-1].content.lower()
 
 
@@ -116,4 +116,4 @@ def test_live_orchestrator_routes_a_data_question():
     result = orch.invoke(
         {"messages": [HumanMessage("How many products do we sell?")]}, _cfg("live")
     )
-    assert result["route"].capability in {"analytics", "marketing", "clarify"}
+    assert result["route"]["capability"] in {"analytics", "marketing", "clarify"}

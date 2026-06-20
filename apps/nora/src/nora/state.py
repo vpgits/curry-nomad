@@ -7,6 +7,16 @@ LangGraph state is a TypedDict with optional reducers on fields. The two reducer
 
 TypedDict (not Pydantic) is used deliberately: it is required by `create_agent` and is the
 clean choice for `StateGraph` partial-update semantics.
+
+**State holds JSON-native data (dicts), not Pydantic models.** The structured-output schemas
+(`RouteDecision`, `ConceptIdea`, …) are used *transiently inside nodes* for validation and typed
+logic, then `.model_dump()`-ed before being written to state. This keeps persistence portable:
+a checkpointer serializes state at every super-step, and the platform (Aegra / `langgraph dev`)
+injects its own checkpointer whose msgpack serializer only deserializes *allow-listed* modules.
+Custom Pydantic types stored there round-trip as bare dicts under `LANGGRAPH_STRICT_MSGPACK=true`
+(and a future LangGraph default), silently breaking attribute access on resume. Dicts dodge that
+entirely; nodes rehydrate (`Model(**d)`) where they need the typed object — see
+`marketing/nodes.py`.
 """
 
 from __future__ import annotations
@@ -15,16 +25,6 @@ import operator
 from typing import Annotated, NotRequired, TypedDict
 
 from langgraph.graph.message import add_messages
-
-from nora.schemas import (
-    ConceptIdea,
-    Critique,
-    RouteDecision,
-    ScriptBeat,
-    Shot,
-    ShotPrompt,
-    VideoBrief,
-)
 
 
 def reset_or_extend(current: list, update) -> list:
@@ -44,7 +44,7 @@ class OrchestratorState(TypedDict):
     """Top-level router state."""
 
     messages: Annotated[list, add_messages]
-    route: NotRequired[RouteDecision]
+    route: NotRequired[dict]  # RouteDecision.model_dump()
 
 
 class AnalyticsState(TypedDict):
@@ -56,18 +56,20 @@ class AnalyticsState(TypedDict):
 class MarketingState(TypedDict):
     """Marketing workflow subgraph state."""
 
+    # Every structured field is the schema's `.model_dump()` dict, not the model itself (see the
+    # module docstring). Nodes rehydrate via `Model(**d)` where they need typed access.
     request: str
     product_hint: str | None
     product_facts: NotRequired[dict]  # the chosen product's real DB row (grounding)
     brand_voice: str
-    concepts: Annotated[list[ConceptIdea], operator.add]  # parallel ideate (gather)
-    chosen_concept: NotRequired[ConceptIdea]
-    script_beats: NotRequired[list[ScriptBeat]]
+    concepts: Annotated[list[dict], operator.add]  # ConceptIdea dicts; parallel ideate (gather)
+    chosen_concept: NotRequired[dict]  # ConceptIdea
+    script_beats: NotRequired[list[dict]]  # ScriptBeat
     approved: NotRequired[bool]
-    shots: NotRequired[list[Shot]]
+    shots: NotRequired[list[dict]]  # Shot
     # Send fan-in (gather), but resettable so revisions don't accumulate stale prompts.
-    shot_prompts: Annotated[list[ShotPrompt], reset_or_extend]
-    critique: NotRequired[Critique]
+    shot_prompts: Annotated[list[dict], reset_or_extend]  # ShotPrompt
+    critique: NotRequired[dict]  # Critique
     revision_count: int
-    brief: NotRequired[VideoBrief]
+    brief: NotRequired[dict]  # VideoBrief
     render_result: NotRequired[dict]

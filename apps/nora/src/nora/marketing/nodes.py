@@ -127,7 +127,7 @@ def make_ideate(model, settings: Settings):
         with ThreadPoolExecutor(max_workers=n) as executor:
             concepts = list(executor.map(one, range(n)))
         log.info("marketing.ideate", concepts=len(concepts))
-        return {"concepts": concepts}
+        return {"concepts": [c.model_dump() for c in concepts]}
 
     return ideate
 
@@ -145,10 +145,10 @@ def make_choose_concept(settings: Settings):
 def make_write_script(model, settings: Settings):
     def write_script(state) -> dict:
         facts = state["product_facts"]
-        concept = state["chosen_concept"]
+        concept = ConceptIdea(**state["chosen_concept"])
         prompt = prompts.script_prompt(concept, state["brand_voice"], facts, target_s=30)
         draft = model.with_structured_output(_ScriptDraft).invoke(prompt)
-        return {"script_beats": draft.beats}
+        return {"script_beats": [b.model_dump() for b in draft.beats]}
 
     return write_script
 
@@ -172,7 +172,7 @@ def make_human_review(settings: Settings, *, auto_approve: bool = False):
             {
                 "question": "Approve this ~30s script before we generate the storyboard and "
                 "shot prompts?",
-                "script_beats": [beat.model_dump() for beat in state["script_beats"]],
+                "script_beats": state["script_beats"],  # already dicts (JSON-native state)
             }
         )
         approved = decision.get("approved", False) if isinstance(decision, dict) else bool(decision)
@@ -181,8 +181,8 @@ def make_human_review(settings: Settings, *, auto_approve: bool = False):
 
         update: dict = {"approved": True}
         edited = decision.get("edited_script") if isinstance(decision, dict) else None
-        if edited:  # honor an edited script
-            update["script_beats"] = [ScriptBeat(**beat) for beat in edited]
+        if edited:  # honor an edited script — validate via the schema, then store as dicts
+            update["script_beats"] = [ScriptBeat(**beat).model_dump() for beat in edited]
         return Command(goto="storyboard", update=update)
 
     return human_review
@@ -207,10 +207,11 @@ def make_cancel(settings: Settings):
 def make_storyboard(model, settings: Settings):
     def storyboard(state) -> dict:
         facts = state["product_facts"]
-        prompt = prompts.storyboard_prompt(state["script_beats"], facts)
+        beats = [ScriptBeat(**b) for b in state["script_beats"]]
+        prompt = prompts.storyboard_prompt(beats, facts)
         board = model.with_structured_output(_Storyboard).invoke(prompt)
         # Reset shot_prompts (None) so a revision loop doesn't accumulate stale prompts.
-        return {"shots": board.shots, "shot_prompts": None}
+        return {"shots": [s.model_dump() for s in board.shots], "shot_prompts": None}
 
     return storyboard
 
@@ -220,11 +221,11 @@ def make_shot_prompt_worker(model, settings: Settings):
     shot's real index, so len(shot_prompts) == len(shots) by construction."""
 
     def shot_prompt_worker(payload) -> dict:
-        shot: Shot = payload["shot"]
+        shot = Shot(**payload["shot"])  # the Send carries a dict (JSON-native state)
         facts = payload["product_facts"]
         text = model.invoke(prompts.shot_prompt_prompt(shot, payload["brand_voice"], facts))
         content = text.content if hasattr(text, "content") else str(text)
-        return {"shot_prompts": [ShotPrompt(index=shot.index, t2v_prompt=content)]}
+        return {"shot_prompts": [ShotPrompt(index=shot.index, t2v_prompt=content).model_dump()]}
 
     return shot_prompt_worker
 
@@ -233,16 +234,16 @@ def make_critique(model, settings: Settings):
     """Evaluator: score the draft against brand voice + platform rules."""
 
     def critique(state) -> dict:
-        prompt = prompts.critique_prompt(
-            state["script_beats"], state["shot_prompts"], state["brand_voice"]
-        )
+        beats = [ScriptBeat(**b) for b in state["script_beats"]]
+        shot_prompts = [ShotPrompt(**p) for p in state["shot_prompts"]]
+        prompt = prompts.critique_prompt(beats, shot_prompts, state["brand_voice"])
         verdict = model.with_structured_output(Critique).invoke(prompt)
         log.info(
             "marketing.revision",
             iteration=state["revision_count"],
             verdict="pass" if verdict.passed else "fail",
         )
-        return {"critique": verdict}
+        return {"critique": verdict.model_dump()}
 
     return critique
 
@@ -251,8 +252,8 @@ def make_route_after_critique(settings: Settings):
     """Optimizer gate: assemble if it passed or we've hit the revision bound; else revise."""
 
     def route_after_critique(state) -> str:
-        verdict: Critique = state["critique"]
-        if verdict.passed or state["revision_count"] >= settings.marketing_max_revisions:
+        verdict = state["critique"]  # Critique dict
+        if verdict["passed"] or state["revision_count"] >= settings.marketing_max_revisions:
             return "assemble"
         return "revise"
 
@@ -261,12 +262,14 @@ def make_route_after_critique(settings: Settings):
 
 def make_revise(model, settings: Settings):
     def revise(state) -> dict:
-        verdict: Critique = state["critique"]
-        prompt = prompts.revise_prompt(
-            state["script_beats"], verdict.issues, verdict.suggestions
-        )
+        verdict = state["critique"]  # Critique dict
+        beats = [ScriptBeat(**b) for b in state["script_beats"]]
+        prompt = prompts.revise_prompt(beats, verdict["issues"], verdict["suggestions"])
         draft = model.with_structured_output(_ScriptDraft).invoke(prompt)
-        return {"script_beats": draft.beats, "revision_count": state["revision_count"] + 1}
+        return {
+            "script_beats": [b.model_dump() for b in draft.beats],
+            "revision_count": state["revision_count"] + 1,
+        }
 
     return revise
 
@@ -277,10 +280,11 @@ def make_assemble(model, settings: Settings):
 
     def assemble(state) -> dict:
         facts = state["product_facts"]
-        concept = state["chosen_concept"]
-        beats: list[ScriptBeat] = state["script_beats"]
-        shots: list[Shot] = state["shots"]
-        shot_prompts = sorted(state["shot_prompts"], key=lambda p: p.index)
+        # Rehydrate the JSON-native state fields into typed models for construction.
+        concept = ConceptIdea(**state["chosen_concept"])
+        beats = [ScriptBeat(**b) for b in state["script_beats"]]
+        shots = [Shot(**s) for s in state["shots"]]
+        shot_prompts = sorted((ShotPrompt(**p) for p in state["shot_prompts"]), key=lambda p: p.index)
 
         copy = model.with_structured_output(_BriefCopy).invoke(
             prompts.brief_copy_prompt(concept, state["brand_voice"], facts)
@@ -304,7 +308,7 @@ def make_assemble(model, settings: Settings):
                 str(facts["category"]),
             ],
         )
-        return {"brief": brief}
+        return {"brief": brief.model_dump()}
 
     return assemble
 
@@ -313,7 +317,7 @@ def make_render(settings: Settings):
     """Render the brief. Placeholder by default (no external call, no spend)."""
 
     def render(state) -> dict:
-        result = get_renderer(settings).render(state["brief"])
+        result = get_renderer(settings).render(VideoBrief(**state["brief"]))
         return {"render_result": result}
 
     return render

@@ -40,6 +40,7 @@ from nora.config import get_settings  # noqa: E402
 from nora.marketing.graph import build_marketing_graph, initial_marketing_state  # noqa: E402
 from nora.marketing.prompts import DEFAULT_BRAND_VOICE  # noqa: E402
 from nora.observability import get_logger, setup_logging  # noqa: E402
+from nora.schemas import VideoBrief  # noqa: E402
 from nora.services.spice_db import build_spice_db  # noqa: E402
 
 log = get_logger(__name__)
@@ -127,7 +128,7 @@ def run_marketing_suite(
     items = []
     for row in _load_jsonl(dataset_path):
         result = graph.invoke(initial_marketing_state(row["request"], row["product_name"]))
-        brief = result["brief"]
+        brief = VideoBrief(**result["brief"])  # state stores a dict; rehydrate for the evaluators
         passed, failures = check_guardrails(brief, spice_db)
         score = judge_brief(brief, DEFAULT_BRAND_VOICE, judge_model) if judge_model else None
         record = {

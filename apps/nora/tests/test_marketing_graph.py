@@ -65,7 +65,9 @@ def _passing_model() -> ScriptedStructuredModel:
     )
 
 
-def _check_guardrails(brief: VideoBrief) -> None:
+def _check_guardrails(brief: dict | VideoBrief) -> None:
+    # State stores the brief as a dict; rehydrate so guardrails read it as the typed schema.
+    brief = brief if isinstance(brief, VideoBrief) else VideoBrief(**brief)
     assert 25 <= brief.target_duration_s <= 35
     assert 2 <= len(brief.shots) <= 8
     assert len(brief.shot_prompts) == len(brief.shots)
@@ -82,15 +84,14 @@ def test_workflow_produces_valid_brief_passing_guardrails():
     result = graph.invoke(
         initial_marketing_state("30s reel for authentic Matale origin", "Ceylon Cinnamon")
     )
-    brief = result["brief"]
-    assert isinstance(brief, VideoBrief)
+    brief = VideoBrief(**result["brief"])  # state stores a dict; validates the round-trip
     _check_guardrails(brief)
 
 
 def test_product_grounding_uses_real_db_facts():
     graph = build_marketing_graph(model=_passing_model(), auto_approve=True)
     result = graph.invoke(initial_marketing_state("reel", "Ceylon Cinnamon (Alba)"))
-    brief = result["brief"]
+    brief = VideoBrief(**result["brief"])
     # The product's real name + origin (Matale in the seed) must appear in the facts used.
     facts_text = " ".join(brief.product_facts_used)
     assert "Ceylon Cinnamon" in brief.product_name
@@ -125,7 +126,7 @@ def test_evaluator_optimizer_loop_is_bounded():
     graph = build_marketing_graph(model=always_fail, settings=settings, auto_approve=True)
     result = graph.invoke(initial_marketing_state("reel", "Turmeric"))
     assert result["revision_count"] == settings.marketing_max_revisions
-    assert isinstance(result["brief"], VideoBrief)  # still assembles after the bound
+    assert VideoBrief(**result["brief"]).shots  # still assembles after the bound
 
 
 def test_one_revision_then_pass():
@@ -162,4 +163,4 @@ def test_live_workflow_builds_a_brief():
     result = graph.invoke(
         initial_marketing_state("30s reel highlighting authentic Matale origin", "Ceylon Cinnamon")
     )
-    assert isinstance(result["brief"], VideoBrief)
+    assert VideoBrief(**result["brief"]).product_name

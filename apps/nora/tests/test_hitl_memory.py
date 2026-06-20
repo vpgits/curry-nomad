@@ -41,7 +41,7 @@ def test_resume_approve_proceeds_to_brief():
     graph = build_marketing_graph(model=_passing_model(), checkpointer=InMemorySaver())
     graph.invoke(initial_marketing_state("reel", "Cloves"), THREAD)
     result = graph.invoke(Command(resume={"approved": True}), THREAD)
-    assert isinstance(result["brief"], VideoBrief)
+    assert VideoBrief(**result["brief"]).product_name  # state stores a dict; validate it
     assert result["render_result"]["status"] == "placeholder"
 
 
@@ -63,14 +63,15 @@ def test_resume_with_edited_script_is_honored():
         {"t_start_s": 3, "t_end_s": 30, "voiceover": "the rest of the edited script", "on_screen_text": None},
     ]
     result = graph.invoke(Command(resume={"approved": True, "edited_script": edited}), cfg)
-    assert result["brief"].script_beats[0].voiceover == "EDITED HOOK from the operator"
+    brief = VideoBrief(**result["brief"])  # state stores a dict
+    assert brief.script_beats[0].voiceover == "EDITED HOOK from the operator"
 
 
 def test_auto_approve_skips_the_interrupt():
     # No checkpointer needed because no interrupt is raised.
     graph = build_marketing_graph(model=_passing_model(), auto_approve=True)
     result = graph.invoke(initial_marketing_state("reel", "Cloves"))
-    assert isinstance(result["brief"], VideoBrief)
+    assert VideoBrief(**result["brief"]).product_name
 
 
 def test_interrupt_requires_a_checkpointer():

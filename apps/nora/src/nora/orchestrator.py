@@ -74,32 +74,44 @@ def build_orchestrator(
             [SystemMessage(content=ROUTER_INSTRUCTIONS), *state["messages"]]
         )
         log.info("route.decided", capability=decision.capability, reason=decision.reason)
-        return Command(goto=decision.capability, update={"route": decision})
+        # Store the dump, not the model — graph state is JSON-native (see nora/state.py).
+        return Command(goto=decision.capability, update={"route": decision.model_dump()})
 
     def analytics(state: OrchestratorState, config) -> dict:
         # Invoke the analytics subgraph with the running conversation; surface its final answer.
         result = analytics_graph.invoke({"messages": state["messages"]}, config)
-        return {"messages": [result["messages"][-1]]}
+        final = result["messages"][-1]
+        # The subgraph's intermediate messages (the agent's run_sql/describe_table calls) don't
+        # reach the orchestrator's state — we only return the final answer. Surface those tool
+        # calls on the final message so the UI can show the agent's work (the SQL it ran).
+        trace = [
+            {"name": tc["name"], "args": tc["args"]}
+            for msg in result["messages"]
+            for tc in (getattr(msg, "tool_calls", None) or [])
+        ]
+        if trace:
+            final.additional_kwargs = {**(final.additional_kwargs or {}), "tool_trace": trace}
+        return {"messages": [final]}
 
     def marketing(state: OrchestratorState, config) -> dict:
-        route_decision = state.get("route")
+        route_decision = state.get("route")  # RouteDecision dict (JSON-native state)
         request = _last_user_text(state["messages"])
-        product_hint = route_decision.product_hint if route_decision else None
+        product_hint = route_decision["product_hint"] if route_decision else None
         # If the subgraph interrupts (human_review), this bubbles up and pauses the orchestrator;
         # on resume the node re-runs and the subgraph continues from its checkpoint.
         result = marketing_graph.invoke(
             initial_marketing_state(request, product_hint), config
         )
-        brief = result.get("brief")
+        brief = result.get("brief")  # VideoBrief dict, or None if rejected at review
         if brief is None:  # rejected at review
             return {"messages": [AIMessage(content="Creative cancelled — no brief produced.")]}
         summary = (
-            f"Video brief ready for {brief.product_name}: \"{brief.concept}\" — hook: "
-            f"\"{brief.hook}\". {len(brief.shots)} shots, ~{brief.target_duration_s:.0f}s, "
-            f"CTA: {brief.cta}. Render: {result.get('render_result', {}).get('status')}."
+            f"Video brief ready for {brief['product_name']}: \"{brief['concept']}\" — hook: "
+            f"\"{brief['hook']}\". {len(brief['shots'])} shots, ~{brief['target_duration_s']:.0f}s, "
+            f"CTA: {brief['cta']}. Render: {result.get('render_result', {}).get('status')}."
         )
         return {
-            "messages": [AIMessage(content=summary, additional_kwargs={"video_brief": brief.model_dump()})]
+            "messages": [AIMessage(content=summary, additional_kwargs={"video_brief": brief})]
         }
 
     def clarify(state: OrchestratorState) -> dict:
