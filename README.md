@@ -33,6 +33,34 @@ The bundled database is committed, so the seed step is only needed if you want t
 (it reproduces byte-for-byte). Running the app and the evals needs a provider key; the tests do
 not (see [Testing](#testing)).
 
+### Web UI (Next.js + Aegra)
+
+Beyond the CLI and LangGraph Studio, there's a browser chat UI. It talks to the `nora` graph
+through **[Aegra](https://github.com/aegra/aegra)** — a self-hosted Agent Protocol backend
+(FastAPI + Postgres) — using the official `@langchain/langgraph-sdk`:
+
+```
+Next.js (useStream) ──Agent Protocol──▶ Aegra ──▶ nora orchestrator graph
+```
+
+Aegra serves the graph (registered in `aegra.json` via the `make_graph` factory) and provides
+the Postgres checkpointer + semantic store at runtime, so HITL interrupts persist and resume,
+and the store propagates into the analytics/marketing subgraphs. The graph code is unchanged —
+that's the point of the Agent Protocol.
+
+```bash
+# Backend (repo root) — needs Docker (Postgres) + OPENAI_API_KEY:
+uv sync --extra aegra
+uv run aegra dev                       # serves nora on http://localhost:2026
+uv run python scripts/seed_store.py    # seed brand voice + metric definitions into the store
+
+# Frontend:
+cd frontend && cp .env.local.example .env.local && npm install && npm run dev   # http://localhost:3000
+```
+
+The UI streams Nora's answers, renders the marketing **approval card** (approve / edit / reject
+the script), and shows the final **VideoBrief**. See [`frontend/`](frontend/) for details.
+
 ### Provider switch (one line)
 
 Every model is built from a `provider:model` config string via `init_chat_model` /

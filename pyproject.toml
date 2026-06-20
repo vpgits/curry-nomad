@@ -25,6 +25,9 @@ dependencies = [
 anthropic = ["langchain-anthropic>=0.3"]
 # The real text-to-video renderer (M7) talks to OpenRouter over HTTP.
 openrouter = ["httpx>=0.27"]
+aegra = [
+    "aegra-cli>=0.1",
+]
 
 [dependency-groups]
 # Installed by `uv sync` by default. langgraph-cli powers `langgraph dev` (M4).

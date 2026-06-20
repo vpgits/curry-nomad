@@ -126,15 +126,15 @@ def build_orchestrator(
     return builder.compile(checkpointer=checkpointer, store=store)
 
 
-def make_graph(config=None):  # noqa: ARG001 - langgraph may pass a config; we don't need it
-    """Factory for `langgraph dev` (referenced by langgraph.json).
+def make_graph():
+    """Factory for a platform server (Aegra via aegra.json, or `langgraph dev`).
 
-    Builds a self-contained orchestrator with a seeded semantic Store. The dev server provides
-    persistence (checkpointer) at runtime, so we compile without our own. Requires provider
-    keys in the environment (it builds real models)."""
-    from nora.memory import build_store, seed_brand_knowledge
+    The platform provides persistence — the Postgres checkpointer (so HITL interrupts persist
+    and resume) and the semantic Store (configured under `store.index` in aegra.json). So we
+    compile WITHOUT our own: the platform injects them at runtime, and the store propagates into
+    the analytics/marketing subgraphs. Seed the Store's brand voice + metric definitions once
+    after the server is up with `scripts/seed_store.py`.
 
-    settings = get_settings()
-    store = build_store(settings)
-    seed_brand_knowledge(store)
-    return build_orchestrator(settings=settings, store=store)
+    (The CLI in `app.py` is the self-contained path — it builds and seeds its own in-memory
+    checkpointer + Store.) Requires provider keys in the environment (it builds real models)."""
+    return build_orchestrator(settings=get_settings())

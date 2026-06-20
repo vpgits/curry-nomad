@@ -80,10 +80,16 @@ _DEFINITIONS_KNOWLEDGE: list[tuple[str, dict]] = [
 ]
 
 
+def seed_items() -> list[tuple[tuple[str, ...], str, dict]]:
+    """The (namespace, key, value) seed records, shared by the in-process seeder and the
+    platform seed script (`scripts/seed_store.py`, which writes them over the Store API)."""
+    return [(BRAND, key, value) for key, value in _BRAND_KNOWLEDGE] + [
+        (DEFINITIONS, key, value) for key, value in _DEFINITIONS_KNOWLEDGE
+    ]
+
+
 def seed_brand_knowledge(store: InMemoryStore) -> None:
     """Idempotently load brand voice + metric definitions into the Store. Called once at
     startup so both capabilities can retrieve them by semantic search."""
-    for key, value in _BRAND_KNOWLEDGE:
-        store.put(BRAND, key, value)
-    for key, value in _DEFINITIONS_KNOWLEDGE:
-        store.put(DEFINITIONS, key, value)
+    for namespace, key, value in seed_items():
+        store.put(namespace, key, value)

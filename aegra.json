@@ -1,0 +1,19 @@
+{
+  "dependencies": ["./src"],
+  "graphs": {
+    "nora": "./src/nora/orchestrator.py:make_graph"
+  },
+  "store": {
+    "index": {
+      "dims": 1536,
+      "embed": "openai:text-embedding-3-small",
+      "fields": ["text", "$"]
+    }
+  },
+  "http": {
+    "cors": {
+      "allow_origins": ["http://localhost:3000"],
+      "allow_credentials": true
+    }
+  }
+}
