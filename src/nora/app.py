@@ -18,9 +18,10 @@ import sys
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 
-from nora.analytics.graph import build_analytics_graph
-from nora.memory import build_checkpointer
+from nora.config import get_settings
+from nora.memory import build_checkpointer, build_store, seed_brand_knowledge
 from nora.observability import bind_context, get_logger, setup_logging
+from nora.orchestrator import build_orchestrator
 
 log = get_logger(__name__)
 
@@ -85,8 +86,16 @@ def main(argv: list[str] | None = None) -> int:
     setup_logging(json_logs=False)  # pretty console output for the live demo
     bind_context(thread_id=THREAD_ID)
 
+    # Build the full orchestrator with memory wired in (short-term checkpointer + seeded
+    # semantic Store). Both are shared into the analytics/marketing subgraphs.
+    settings = get_settings()
+    store = build_store(settings)
+    seed_brand_knowledge(store)
+    graph = build_orchestrator(
+        settings=settings, checkpointer=build_checkpointer(), store=store
+    )
+
     user_input = " ".join(argv)
-    graph = build_analytics_graph(checkpointer=build_checkpointer())
     print(f"You: {user_input}")
     run_turn(graph, user_input)
     return 0
