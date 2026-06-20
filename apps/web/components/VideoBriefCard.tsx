@@ -1,62 +1,118 @@
 "use client";
 
+import { Clapperboard, Film, Hash, Megaphone, Music2, Quote } from "lucide-react";
+
+import { Badge } from "@/components/ui/badge";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
 import type { VideoBrief } from "@/lib/types";
 
 // Renders the final creative package the marketing workflow produces.
 export function VideoBriefCard({ brief }: { brief: VideoBrief }) {
   return (
-    <div className="card brief">
-      <h3>🎬 Video brief — {brief.product_name}</h3>
-      <div className="sub">
-        {brief.concept} · ~{Math.round(brief.target_duration_s)}s · {brief.platform}
-      </div>
+    <Card className="gap-4">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Clapperboard className="size-4 text-muted-foreground" />
+          Video brief — {brief.product_name}
+        </CardTitle>
+        <CardDescription>
+          {brief.concept} · ~{Math.round(brief.target_duration_s)}s · {brief.platform}
+        </CardDescription>
+      </CardHeader>
 
-      <div className="grid">
-        <div>
-          <div className="label">Hook</div>
-          {brief.hook}
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
+          <Stat label="Hook" value={brief.hook} />
+          <Stat label="Call to action" value={brief.cta} icon={<Megaphone className="size-3" />} />
+          <Stat label="Music mood" value={brief.music_mood} icon={<Music2 className="size-3" />} />
+          <Stat
+            label="Shots"
+            value={`${brief.shots.length} shots · ${brief.shot_prompts.length} prompts`}
+          />
         </div>
-        <div>
-          <div className="label">Call to action</div>
-          {brief.cta}
-        </div>
-        <div>
-          <div className="label">Music mood</div>
-          {brief.music_mood}
-        </div>
-        <div>
-          <div className="label">Shots</div>
-          {brief.shots.length} ({brief.shot_prompts.length} prompts)
-        </div>
-      </div>
 
-      <div className="section-title">Script</div>
-      {brief.script_beats.map((b, i) => (
-        <div className="beat" key={i}>
-          <div className="t">
-            {b.t_start_s}s – {b.t_end_s}s
+        <Separator />
+
+        <section className="space-y-2">
+          <SectionTitle icon={<Film className="size-3.5" />}>Script</SectionTitle>
+          <div className="space-y-2">
+            {brief.script_beats.map((b, i) => (
+              <div key={i} className="border-l-2 border-border pl-3">
+                <div className="font-mono text-xs text-muted-foreground">
+                  {b.t_start_s}s – {b.t_end_s}s
+                </div>
+                <p className="text-sm leading-relaxed">{b.voiceover}</p>
+              </div>
+            ))}
           </div>
-          <div>{b.voiceover}</div>
-        </div>
-      ))}
+        </section>
 
-      <div className="section-title">Grounded in</div>
-      <div className="tags">
-        {brief.product_facts_used.map((f, i) => (
-          <span className="tag" key={i}>
-            {f}
-          </span>
-        ))}
-      </div>
+        <Separator />
 
-      <div className="section-title">Hashtags</div>
-      <div className="tags">
-        {brief.hashtags.map((h, i) => (
-          <span className="tag" key={i}>
-            {h}
-          </span>
-        ))}
+        <section className="space-y-2">
+          <SectionTitle icon={<Quote className="size-3.5" />}>Grounded in</SectionTitle>
+          <div className="flex flex-wrap gap-1.5">
+            {brief.product_facts_used.map((f, i) => (
+              <Badge key={i} variant="secondary" className="font-normal">
+                {f}
+              </Badge>
+            ))}
+          </div>
+        </section>
+
+        <section className="space-y-2">
+          <SectionTitle icon={<Hash className="size-3.5" />}>Hashtags</SectionTitle>
+          <div className="flex flex-wrap gap-1.5">
+            {brief.hashtags.map((h, i) => (
+              <Badge key={i} variant="outline">
+                {h}
+              </Badge>
+            ))}
+          </div>
+        </section>
+      </CardContent>
+    </Card>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  icon,
+}: {
+  label: string;
+  value: string;
+  icon?: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+        {icon}
+        {label}
       </div>
+      <p className="text-sm leading-relaxed">{value}</p>
+    </div>
+  );
+}
+
+function SectionTitle({
+  children,
+  icon,
+}: {
+  children: React.ReactNode;
+  icon?: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+      {icon}
+      {children}
     </div>
   );
 }

@@ -1,6 +1,7 @@
 # Curry Nomad — web UI
 
-A small **Next.js (App Router + TypeScript)** chat frontend for Nora. It talks to the `nora`
+A small **Next.js (App Router + TypeScript)** chat frontend for Nora, styled with
+**shadcn/ui** (Tailwind v4). It talks to the `nora`
 graph through **Aegra** (the self-hosted Agent Protocol backend) using the official
 [`@langchain/langgraph-sdk`](https://www.npmjs.com/package/@langchain/langgraph-sdk) `useStream`
 hook — so streaming, threads, and human-in-the-loop interrupts are handled by the SDK, not a
@@ -38,8 +39,8 @@ Then the frontend:
 ```bash
 cd apps/web
 cp .env.local.example .env.local   # NEXT_PUBLIC_AEGRA_URL=http://localhost:2026
-npm install
-npm run dev                        # http://localhost:3000
+pnpm install
+pnpm dev                           # http://localhost:3000
 ```
 
 `aegra.json` allows CORS from `http://localhost:3000`. Requires Docker (for Postgres) and an

@@ -1,6 +1,20 @@
 "use client";
 
 import { useState } from "react";
+import { Check, Pencil, PauseCircle, X } from "lucide-react";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Textarea } from "@/components/ui/textarea";
 import type { ReviewDecision, ReviewInterrupt, ScriptBeat } from "@/lib/types";
 
 // The HITL gate. Renders the proposed ~30s script and lets the operator approve, edit, or
@@ -21,48 +35,66 @@ export function ApprovalCard({
     setBeats((prev) => prev.map((b, j) => (j === i ? { ...b, voiceover: value } : b)));
 
   return (
-    <div className="card">
-      <h3>⏸ Human review</h3>
-      <div className="sub">{payload.question}</div>
+    <Card className="border-primary/30 ring-primary/10">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <PauseCircle className="size-4 text-muted-foreground" />
+          Human review
+        </CardTitle>
+        <CardAction>
+          <Badge variant="secondary">Action needed</Badge>
+        </CardAction>
+        <CardDescription>{payload.question}</CardDescription>
+      </CardHeader>
 
-      {beats.map((beat, i) => (
-        <div className="beat" key={i}>
-          <div className="t">
-            {beat.t_start_s}s – {beat.t_end_s}s
+      <CardContent className="space-y-3">
+        {beats.map((beat, i) => (
+          <div key={i} className="border-l-2 border-border pl-3">
+            <div className="mb-1 font-mono text-xs text-muted-foreground">
+              {beat.t_start_s}s – {beat.t_end_s}s
+            </div>
+            {editing ? (
+              <Textarea
+                rows={2}
+                value={beat.voiceover}
+                onChange={(e) => setVoiceover(i, e.target.value)}
+                className="resize-y"
+              />
+            ) : (
+              <p className="text-sm leading-relaxed">{beat.voiceover}</p>
+            )}
           </div>
-          {editing ? (
-            <textarea
-              rows={2}
-              value={beat.voiceover}
-              onChange={(e) => setVoiceover(i, e.target.value)}
-            />
-          ) : (
-            <div>{beat.voiceover}</div>
-          )}
-        </div>
-      ))}
+        ))}
+      </CardContent>
 
-      <div className="row">
+      <CardFooter className="flex-wrap gap-2">
         {editing ? (
-          <button
-            className="btn approve"
+          <Button
             disabled={disabled}
             onClick={() => onDecision({ approved: true, edited_script: beats })}
           >
-            Save &amp; approve
-          </button>
+            <Check /> Save &amp; approve
+          </Button>
         ) : (
-          <button className="btn approve" disabled={disabled} onClick={() => onDecision({ approved: true })}>
-            Approve
-          </button>
+          <Button disabled={disabled} onClick={() => onDecision({ approved: true })}>
+            <Check /> Approve
+          </Button>
         )}
-        <button className="btn edit" disabled={disabled} onClick={() => setEditing((e) => !e)}>
-          {editing ? "Cancel edit" : "Edit script"}
-        </button>
-        <button className="btn reject" disabled={disabled} onClick={() => onDecision({ approved: false })}>
-          Reject
-        </button>
-      </div>
-    </div>
+        <Button
+          variant="outline"
+          disabled={disabled}
+          onClick={() => setEditing((e) => !e)}
+        >
+          <Pencil /> {editing ? "Cancel edit" : "Edit script"}
+        </Button>
+        <Button
+          variant="destructive"
+          disabled={disabled}
+          onClick={() => onDecision({ approved: false })}
+        >
+          <X /> Reject
+        </Button>
+      </CardFooter>
+    </Card>
   );
 }
