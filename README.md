@@ -48,6 +48,20 @@ the Postgres checkpointer + semantic store at runtime, so HITL interrupts persis
 and the store propagates into the analytics/marketing subgraphs. The graph code is unchanged —
 that's the point of the Agent Protocol.
 
+**Option A — the whole app in one command (Docker).** Builds and runs Postgres + the Aegra
+backend + the Next.js UI, and seeds the Store automatically:
+
+```bash
+cp .env.example .env          # add OPENAI_API_KEY (the backend won't boot without it)
+docker compose up --build     # → open http://localhost:3000
+```
+
+The browser hits the UI on `:3000`, which streams from Aegra on `:2026`; the one-shot `seed`
+service loads brand voice + metric definitions once the API is healthy. `docker compose down`
+stops it (`-v` also wipes the Postgres volume).
+
+**Option B — local dev (hot reload).** Postgres in Docker, the app processes local:
+
 ```bash
 # Backend (repo root) — needs Docker (Postgres) + OPENAI_API_KEY:
 uv sync --extra aegra
@@ -55,7 +69,7 @@ uv run aegra dev                       # serves nora on http://localhost:2026
 uv run python apps/nora/scripts/seed_store.py   # seed brand voice + metric definitions into the store
 
 # Frontend:
-cd apps/web && cp .env.local.example .env.local && npm install && npm run dev    # http://localhost:3000
+cd apps/web && cp .env.local.example .env.local && pnpm install && pnpm dev    # http://localhost:3000
 ```
 
 The UI streams Nora's answers, renders the marketing **approval card** (approve / edit / reject
@@ -91,7 +105,7 @@ semantic Store even when the chat model is Anthropic — or point it at another 
 | **Routing** | `orchestrator.py` | Orchestrator + HITL (0:55–1:05) |
 | **Human-in-the-loop (`interrupt`)** | `marketing` `human_review` node | Orchestrator + HITL |
 | **Memory: checkpointer + semantic Store** | `memory.py`, read via `runtime.store` in both | Orchestrator + HITL |
-| **Observability (structlog + LangSmith)** | `observability.py` | Observability + evals (1:05–1:25) |
+| **Observability (structlog + LangSmith / Langfuse)** | `observability.py`, `docker-compose.langfuse.yml` | Observability + evals (1:05–1:25) |
 | **Evaluation (deterministic + LLM-judge)** | `evals/` | Observability + evals |
 | Ports & adapters, reliability | `services/`, `tenacity`, typed `SqlError` | Extensibility (1:25–1:30) |
 
@@ -117,7 +131,32 @@ analytics pulls metric **definitions**, marketing pulls **brand voice**.
 
 **Observability (`observability.py`).** Structured `structlog` events with consistent keys
 (`route.decided`, `sql.run`, `sql.error`, `hitl.raised`, `marketing.revision`, `eval.scored`),
-never `print()`. LangSmith tracing turns on automatically when `LANGSMITH_TRACING=true`.
+never `print()`. Two optional, env-gated tracers sit on top: **LangSmith** turns on automatically
+when `LANGSMITH_TRACING=true`; **Langfuse** attaches a LangChain `CallbackHandler` in the CLI
+(`get_langfuse_handler()`, gated on `LANGFUSE_PUBLIC_KEY`) — one attach point, because the
+orchestrator passes the same `config` into both subgraphs, so the whole turn (router → analytics
+agent → marketing workflow) lands in one trace. Both are no-ops when unconfigured.
+
+**Self-host Langfuse & trace the CLI demo.** No cloud signup — run the stack locally:
+
+```bash
+docker compose -f docker-compose.langfuse.yml up -d   # web, worker, postgres, clickhouse, redis, minio
+# open http://localhost:3001  (port 3001 because the Next.js UI owns 3000; org/project/keys are
+# auto-created on first boot via LANGFUSE_INIT_*)
+uv sync --extra langfuse                                # install the optional tracer
+# in .env, uncomment the LANGFUSE_* block (keys already match the compose headless-init values)
+uv run python -m nora.app "What was our best-selling product in Colombo last quarter?"
+# then open http://localhost:3001 → Traces to see the `nora-turn` trace (models, tokens, spans)
+```
+
+The CLI flushes Langfuse before exit, so the short-lived process doesn't drop the trace.
+
+**Tracing the full web app** is config-only — no code: Aegra ships native OpenTelemetry
+observability, auto-instruments LangChain, and fans out to a Langfuse target. Bring up the
+Langfuse stack, then set `OTEL_TARGETS=LANGFUSE` + `LANGFUSE_BASE_URL` + the keys in `.env`
+(see `.env.example`) and run the app. Aegra tags each trace with the thread id, so a whole
+conversation lands in the **Sessions** view. (`LANGSMITH_*` works on this path too — Aegra picks
+it up natively.)
 
 **Evaluation (`evals/`).** Two styles, on purpose. Analytics is graded against ground truth
 *derived from the data itself* (run the item's `reference_sql`) plus a trajectory recovery metric.

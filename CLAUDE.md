@@ -122,7 +122,21 @@ are config changes, never graph changes.
 
 **Observability (`observability.py`).** Structured `structlog` events with stable keys
 (`route.decided`, `sql.run`, `sql.error`, `hitl.raised`, `marketing.revision`, `eval.scored`) — use
-the logger, never `print()` (except the human-facing eval report and the demo CLI rendering).
+the logger, never `print()` (except the human-facing eval report and the demo CLI rendering). Two
+optional, env-gated tracers layer on top: **LangSmith** (auto-on via `LANGSMITH_TRACING=true`) and
+**Langfuse** (`get_langfuse_handler()`, gated on `LANGFUSE_PUBLIC_KEY`; lazy-imported optional extra
+`uv sync --extra langfuse`). Like provider keys, `LANGFUSE_*` is read straight from the environment,
+never added to `Settings`. The CLI attaches the Langfuse handler to its run `config` (one attach
+point traces the whole orchestrator via the `config` pass-through) and flushes before exit; self-host
+the stack with `docker-compose.langfuse.yml` (UI on :3001). The **full web app** (Aegra) needs no
+code to trace: Aegra ships native OpenTelemetry observability and auto-instruments LangChain — set
+`OTEL_TARGETS=LANGFUSE` + `LANGFUSE_BASE_URL` (+ keys) in the env and it fans out to Langfuse,
+grouping traces by thread in the Sessions view.
+
+**Running the whole app.** The root `docker-compose.yml` builds + runs the full stack (Postgres +
+Aegra backend + one-shot Store `seed` + Next.js `web`): `docker compose up --build` → the UI on
+:3000. `Dockerfile` (backend, `aegra serve`) and `apps/web/Dockerfile` (Next.js) back it; the web
+image pins pnpm via `packageManager`. The in-repo alternative is `aegra dev` + `pnpm dev`.
 
 ## Testing approach
 

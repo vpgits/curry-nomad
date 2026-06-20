@@ -28,7 +28,8 @@ from nora.memory import seed_items  # noqa: E402
 async def seed(url: str) -> None:
     client = get_client(url=url)
     for namespace, key, value in seed_items():
-        await client.store.put_item(namespace=list(namespace), key=key, value=value)
+        # `namespace` is positional-only in langgraph-sdk's StoreClient.put_item().
+        await client.store.put_item(list(namespace), key=key, value=value)
         print(f"seeded {namespace} / {key}")
     print(f"Done. Seeded {len(seed_items())} items into {url}.")
 

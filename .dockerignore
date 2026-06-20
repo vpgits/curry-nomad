@@ -1,0 +1,20 @@
+# Keep the backend build context small + reproducible.
+.git
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+
+# Frontend (built by apps/web/Dockerfile, not the backend image)
+apps/web/node_modules
+apps/web/.next
+node_modules
+
+# Local env / data / editor
+.env
+*.env.local
+.claude
+.playwright-mcp
+*.db-journal
