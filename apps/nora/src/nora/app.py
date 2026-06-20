@@ -20,7 +20,13 @@ from langgraph.types import Command
 
 from nora.config import get_settings
 from nora.memory import build_checkpointer, build_store, seed_brand_knowledge
-from nora.observability import bind_context, get_logger, setup_logging
+from nora.observability import (
+    bind_context,
+    flush_langfuse,
+    get_langfuse_handler,
+    get_logger,
+    setup_logging,
+)
 from nora.orchestrator import build_orchestrator
 
 log = get_logger(__name__)
@@ -46,6 +52,22 @@ def run_turn(graph, text: str, thread_id: str = THREAD_ID) -> dict:
     """Stream one turn through the graph, printing progress. Resumes from any HITL interrupt
     by prompting the operator. Returns the final state."""
     config = {"configurable": {"thread_id": thread_id}}
+
+    # Optional Langfuse tracing: one attach point covers the whole turn. The orchestrator passes
+    # this same `config` into the analytics agent and the marketing workflow, so the callback
+    # propagates everywhere automatically. No-op when Langfuse isn't configured (handler is None).
+    handler = get_langfuse_handler()
+    if handler is not None:
+        config["callbacks"] = [handler]
+        # SDK v3 reads these off the run config's metadata (NOT constructor args). `session_id`
+        # is warranted because this is a multi-turn chat thread — grouping the turns under the
+        # thread_id lets the Langfuse Sessions view show the whole conversation together.
+        config["metadata"] = {
+            "langfuse_session_id": thread_id,
+            "langfuse_tags": ["nora", "cli"],
+            "langfuse_trace_name": "nora-turn",
+        }
+
     inputs: dict | Command = {"messages": [HumanMessage(content=text)]}
 
     while True:
@@ -97,7 +119,12 @@ def main(argv: list[str] | None = None) -> int:
 
     user_input = " ".join(argv)
     print(f"You: {user_input}")
-    run_turn(graph, user_input)
+    try:
+        run_turn(graph, user_input)
+    finally:
+        # The Langfuse SDK batches events in the background; flush before this short-lived
+        # process exits or the trace may never be sent. No-op when Langfuse isn't configured.
+        flush_langfuse()
     return 0
 
 

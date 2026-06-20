@@ -25,6 +25,9 @@ dependencies = [
 anthropic = ["langchain-anthropic>=0.3"]
 # The real text-to-video renderer (M7) talks to OpenRouter over HTTP.
 openrouter = ["httpx>=0.27"]
+# Optional Langfuse tracing. Enable with `uv sync --extra langfuse`, then set the LANGFUSE_*
+# env vars (see .env.example) — the CLI attaches a LangChain CallbackHandler and traces the run.
+langfuse = ["langfuse>=3"]
 aegra = [
     "aegra-cli>=0.1",
 ]
