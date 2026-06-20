@@ -52,7 +52,8 @@ select = ["E", "F", "I", "B", "UP", "W"]
 ignore = ["E501"]
 
 [tool.pytest.ini_options]
-# Belt-and-suspenders: tests import `nora.*` even without an editable install.
-pythonpath = ["src"]
+# Belt-and-suspenders: import `nora.*` (from src) and `tests.*` (shared fakes) without
+# requiring an editable install.
+pythonpath = ["src", "."]
 testpaths = ["tests"]
 addopts = "-q"
