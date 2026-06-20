@@ -30,13 +30,13 @@ First start the backend (from the repo root) and seed memory:
 uv sync --extra aegra
 cp .env.example .env          # add OPENAI_API_KEY
 uv run aegra dev              # serves the nora graph on http://localhost:2026 (+ Postgres via Docker)
-uv run python scripts/seed_store.py   # seed brand voice + metric definitions into the store
+uv run python apps/nora/scripts/seed_store.py   # seed brand voice + metric definitions into the store
 ```
 
 Then the frontend:
 
 ```bash
-cd frontend
+cd apps/web
 cp .env.local.example .env.local   # NEXT_PUBLIC_AEGRA_URL=http://localhost:2026
 npm install
 npm run dev                        # http://localhost:3000

@@ -8,30 +8,42 @@ A LangGraph / LangChain **1.x** teaching artifact. "Nora" is the operations assi
 fictional Sri Lankan spice business. One **orchestrator** routes each request to one of two
 capabilities that deliberately contrast:
 
-- **Analytics — an AGENT** (`src/nora/analytics/`): a hand-written tool loop that writes SQL
-  over a bundled SQLite DB and *self-corrects when a query fails*.
-- **Marketing Studio — a WORKFLOW** (`src/nora/marketing/`): a deterministic graph (chaining +
-  parallel fan-out + evaluator-optimizer loop) that produces a video-ad brief, with one
-  human-review checkpoint.
+- **Analytics — an AGENT** (`analytics/`): a hand-written tool loop that writes SQL over a
+  bundled SQLite DB and *self-corrects when a query fails*.
+- **Marketing Studio — a WORKFLOW** (`marketing/`): a deterministic graph (chaining + parallel
+  fan-out + evaluator-optimizer loop) that produces a video-ad brief, with one human-review
+  checkpoint.
 
 Because it is a teaching codebase, clarity and the *visibility of the mechanism* are the point —
 e.g. the agent loop is spelled out by hand rather than using `create_agent` (the prebuilt
 shortcut is preserved in an appendix comment in `analytics/graph.py`). Preserve that intent when
 editing: keep patterns explicit and the explanatory docstrings/comments intact.
 
+## Repository layout
+
+Monorepo with two sibling apps under `apps/`:
+- `apps/nora/` — the Python backend (package `nora` under `apps/nora/src/nora/`, plus `tests/`,
+  `evals/`, `scripts/`).
+- `apps/web/` — the Next.js frontend (Aegra / Agent Protocol client).
+
+It's a **single root Python package**: `pyproject.toml`, `uv.lock`, and the `langgraph.json` /
+`aegra.json` graph configs live at the **repo root** — run every command from there. Unless a
+path is given from the repo root, file references below are relative to the `nora` package
+(`apps/nora/src/nora/`).
+
 ## Commands
 
-Python is managed with **uv** (Python 3.12). Source lives under `src/nora/` (package `nora`).
+Python is managed with **uv** (Python 3.12). Run all commands from the repo root.
 
 ```bash
 uv sync                                          # install deps
 uv run python -m nora.data.seed                  # rebuild the bundled SQLite DB (deterministic; only if changing data)
 uv run python -m nora.app "What was our best-selling product in Colombo last quarter?"   # run one turn (needs provider key)
-uv run python evals/run_evals.py --suite all     # eval suites: analytics | marketing | all (needs provider key)
+uv run python apps/nora/evals/run_evals.py --suite all   # eval suites: analytics | marketing | all (needs provider key)
 uv run langgraph dev                             # serve the `nora` graph + LangSmith Studio
 
 uv run pytest                                    # full offline test suite (NO API key needed)
-uv run pytest tests/test_analytics_graph.py      # one file
+uv run pytest apps/nora/tests/test_analytics_graph.py   # one file
 uv run pytest -k recovery                         # one test by name substring
 uv run ruff check .                              # lint (line-length 100, ruff config in pyproject.toml)
 ```
@@ -50,8 +62,8 @@ the semantic Store still needs `OPENAI_API_KEY` even on a non-OpenAI chat model.
 ### Web stack (optional)
 ```bash
 uv sync --extra aegra && uv run aegra dev        # serve `nora` over the Agent Protocol on :2026 (needs Docker + OPENAI_API_KEY)
-uv run python scripts/seed_store.py              # seed brand voice + metric definitions into the running Store
-cd frontend && npm install && npm run dev        # Next.js chat UI on :3000
+uv run python apps/nora/scripts/seed_store.py    # seed brand voice + metric definitions into the running Store
+cd apps/web && npm install && npm run dev        # Next.js chat UI on :3000
 ```
 
 ## Architecture — the load-bearing ideas
@@ -94,8 +106,8 @@ the interrupt in unattended/eval runs.
 semantic Store (long-term), both compiled in and actually *read in nodes via `runtime.store`* —
 not built-and-ignored. Two namespaces: `BRAND` (marketing reads brand voice) and `DEFINITIONS`
 (analytics reads metric definitions). Seed data lives in `seed_items()`, loaded two ways: in-process
-`seed_brand_knowledge(store)` for the CLI, and `scripts/seed_store.py` over the Store API for the
-Aegra/platform path.
+`seed_brand_knowledge(store)` for the CLI, and `apps/nora/scripts/seed_store.py` over the Store
+API for the Aegra/platform path.
 
 **Config (`config.py`).** `Settings` (pydantic-settings, `NORA_` env prefix) via the cached
 `get_settings()` singleton. **Secrets are intentionally NOT Settings fields** — provider keys and
@@ -114,11 +126,11 @@ the logger, never `print()` (except the human-facing eval report and the demo CL
 
 ## Testing approach
 
-Graphs accept an injected `model=`, and `tests/fakes.py` provides `ScriptedChatModel` (pops a
-pre-scripted sequence of AIMessages — script a bad-SQL call then a good one to exercise
+Graphs accept an injected `model=`, and `apps/nora/tests/fakes.py` provides `ScriptedChatModel`
+(pops a pre-scripted sequence of AIMessages — script a bad-SQL call then a good one to exercise
 self-correction with the *real* ToolNode + DB) and `ScriptedStructuredModel` (returns scripted
-objects per Pydantic schema for the marketing workflow). `tests/conftest.py` builds a disposable
-seeded DB per session. When adding a graph node or path, add an offline test that drives it with a
+objects per Pydantic schema for the marketing workflow). `apps/nora/tests/conftest.py` builds a
+disposable seeded DB per session. When adding a graph node or path, add an offline test that drives it with a
 fake rather than a live model.
 
 ## Specs

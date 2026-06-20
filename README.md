@@ -25,7 +25,7 @@ uv sync                                   # installs deps + Python 3.12
 cp .env.example .env                       # then add a provider key (see below)
 uv run python -m nora.data.seed            # build the bundled SQLite DB (deterministic)
 uv run python -m nora.app "What was our best-selling product in Colombo last quarter?"
-uv run python evals/run_evals.py --suite all
+uv run python apps/nora/evals/run_evals.py --suite all
 uv run langgraph dev                        # optional: serve the graph + view traces in Studio
 ```
 
@@ -52,14 +52,14 @@ that's the point of the Agent Protocol.
 # Backend (repo root) — needs Docker (Postgres) + OPENAI_API_KEY:
 uv sync --extra aegra
 uv run aegra dev                       # serves nora on http://localhost:2026
-uv run python scripts/seed_store.py    # seed brand voice + metric definitions into the store
+uv run python apps/nora/scripts/seed_store.py   # seed brand voice + metric definitions into the store
 
 # Frontend:
-cd frontend && cp .env.local.example .env.local && npm install && npm run dev   # http://localhost:3000
+cd apps/web && cp .env.local.example .env.local && npm install && npm run dev    # http://localhost:3000
 ```
 
 The UI streams Nora's answers, renders the marketing **approval card** (approve / edit / reject
-the script), and shows the final **VideoBrief**. See [`frontend/`](frontend/) for details.
+the script), and shows the final **VideoBrief**. See [`apps/web/`](apps/web/) for details.
 
 ### Provider switch (one line)
 
@@ -126,21 +126,32 @@ grounding, banned claims) plus an LLM-as-judge rubric. The HITL gate is auto-app
 
 ## Project layout
 
+Monorepo: two sibling apps under `apps/`. The Python side is a single root package — its
+`pyproject.toml` / `uv.lock` and the `langgraph.json` / `aegra.json` graph configs live at the
+repo root; all commands run from there.
+
 ```
-src/nora/
-  config.py            settings (pydantic-settings); model strings; data_as_of
-  observability.py     structlog setup + event helpers
-  schemas.py           Pydantic LLM contracts + Context dataclass
-  state.py             TypedDict graph states + reducers
-  memory.py            build_store / build_checkpointer / seed_brand_knowledge
-  orchestrator.py      the router graph (entry point) + make_graph for `langgraph dev`
-  app.py               demo CLI (streams a turn, prompts on HITL)
-  analytics/           tools.py · prompts.py · graph.py   (the AGENT)
-  marketing/           prompts.py · nodes.py · graph.py   (the WORKFLOW)
-  services/            interfaces.py (ports) · spice_db.py · renderer.py
-  data/                seed.py + the committed curry_nomad.db
-evals/                 datasets (.jsonl) · evaluators.py · run_evals.py
-tests/                 offline tests (fakes drive every graph without an API key)
+apps/
+  nora/                       the Python backend (package `nora`)
+    src/nora/
+      config.py            settings (pydantic-settings); model strings; data_as_of
+      observability.py     structlog setup + event helpers
+      schemas.py           Pydantic LLM contracts + Context dataclass
+      state.py             TypedDict graph states + reducers
+      memory.py            build_store / build_checkpointer / seed_brand_knowledge
+      orchestrator.py      the router graph (entry point) + make_graph for `langgraph dev`
+      app.py               demo CLI (streams a turn, prompts on HITL)
+      analytics/           tools.py · prompts.py · graph.py   (the AGENT)
+      marketing/           prompts.py · nodes.py · graph.py   (the WORKFLOW)
+      services/            interfaces.py (ports) · spice_db.py · renderer.py
+      data/                seed.py + the committed curry_nomad.db
+    evals/                 datasets (.jsonl) · evaluators.py · run_evals.py
+    tests/                 offline tests (fakes drive every graph without an API key)
+    scripts/               seed_store.py (seed the platform Store over the API)
+  web/                      Next.js chat UI (Aegra / Agent Protocol client)
+docs/  specs/              case-study plan + build specs (read in order)
+pyproject.toml  uv.lock    single root Python package
+langgraph.json  aegra.json graph configs (beside the pyproject)
 ```
 
 ## Testing

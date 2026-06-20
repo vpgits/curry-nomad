@@ -1,8 +1,8 @@
 """Run the evaluation suites.
 
-    python evals/run_evals.py --suite all          # analytics + marketing, offline
-    python evals/run_evals.py --suite analytics
-    python evals/run_evals.py --suite marketing --langsmith
+    uv run python apps/nora/evals/run_evals.py --suite all          # analytics + marketing, offline
+    uv run python apps/nora/evals/run_evals.py --suite analytics
+    uv run python apps/nora/evals/run_evals.py --suite marketing --langsmith
 
 Offline by default: it runs the actual graphs against the bundled DB with the configured model
 (so it needs a provider key, e.g. OPENAI_API_KEY — but no external data and no LangSmith). The

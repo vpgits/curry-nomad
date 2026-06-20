@@ -3,8 +3,8 @@
 Run this once after the Aegra server is up, so the analytics agent can retrieve metric
 definitions and the marketing workflow can retrieve brand voice (memory shaping behavior):
 
-    uv run aegra dev                       # in one terminal (starts the server + Postgres)
-    uv run python scripts/seed_store.py    # in another (writes the seed over the Store API)
+    uv run aegra dev                                # in one terminal (starts the server + Postgres)
+    uv run python apps/nora/scripts/seed_store.py   # in another (writes the seed over the Store API)
 
 Targets http://localhost:2026 by default (Aegra). Override with --url or AEGRA_URL — the same
 script works against any Agent-Protocol server (e.g. `langgraph dev`).

@@ -1,4 +1,4 @@
-// Mirrors the Pydantic contracts in src/nora/schemas.py (the marketing VideoBrief) and the
+// Mirrors the Pydantic contracts in apps/nora/src/nora/schemas.py (the marketing VideoBrief) and the
 // human_review interrupt payload, so the UI can render them type-safely.
 
 export interface ScriptBeat {

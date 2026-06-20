@@ -42,12 +42,12 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/nora"]
+packages = ["apps/nora/src/nora"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["src", "tests", "evals"]
+src = ["apps/nora/src", "apps/nora/tests", "apps/nora/evals"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "W"]
@@ -55,8 +55,8 @@ select = ["E", "F", "I", "B", "UP", "W"]
 ignore = ["E501"]
 
 [tool.pytest.ini_options]
-# Belt-and-suspenders: import `nora.*` (from src) and `tests.*` (shared fakes) without
-# requiring an editable install.
-pythonpath = ["src", "."]
-testpaths = ["tests"]
+# Belt-and-suspenders: import `nora.*` (from apps/nora/src) plus `tests.*` / `evals.*`
+# (shared fakes + suites, from apps/nora) without requiring an editable install.
+pythonpath = ["apps/nora/src", "apps/nora"]
+testpaths = ["apps/nora/tests"]
 addopts = "-q"

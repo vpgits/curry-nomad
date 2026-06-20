@@ -19,10 +19,14 @@ venv/
 .mypy_cache/
 .langgraph_api/
 
+# Node / web apps (apps/web also ships its own .gitignore)
+node_modules/
+.next/
+
 # OS / editor
 .DS_Store
 .idea/
 .vscode/
 
-# NOTE: src/nora/data/curry_nomad.db is intentionally committed (the bundled,
+# NOTE: apps/nora/src/nora/data/curry_nomad.db is intentionally committed (the bundled,
 # deterministic demo dataset). Do not add a blanket *.db / *.sqlite ignore.

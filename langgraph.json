@@ -2,7 +2,7 @@
   "$schema": "https://langgra.ph/schema.json",
   "dependencies": ["."],
   "graphs": {
-    "nora": "./src/nora/orchestrator.py:make_graph"
+    "nora": "./apps/nora/src/nora/orchestrator.py:make_graph"
   },
   "env": ".env",
   "store": {

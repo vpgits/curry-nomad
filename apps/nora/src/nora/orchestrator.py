@@ -133,7 +133,7 @@ def make_graph():
     and resume) and the semantic Store (configured under `store.index` in aegra.json). So we
     compile WITHOUT our own: the platform injects them at runtime, and the store propagates into
     the analytics/marketing subgraphs. Seed the Store's brand voice + metric definitions once
-    after the server is up with `scripts/seed_store.py`.
+    after the server is up with `apps/nora/scripts/seed_store.py`.
 
     (The CLI in `app.py` is the self-contained path — it builds and seeds its own in-memory
     checkpointer + Store.) Requires provider keys in the environment (it builds real models)."""
