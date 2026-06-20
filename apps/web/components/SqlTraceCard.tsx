@@ -12,10 +12,13 @@ import type { ToolCallTrace, ToolTraceStep } from "@/lib/types";
 // then repairs). Shows request *and* response per call. Collapsed by default to keep answers clean.
 export function SqlTraceCard({ trace }: { trace: ToolTraceStep[] }) {
   const [open, setOpen] = useState(false);
-  if (trace.length === 0) return null;
+  // Tolerate the pre-steps trace shape persisted in older threads' checkpoints: drop anything
+  // that isn't a well-formed step rather than crashing on a missing `calls`.
+  const steps = trace.filter((s) => Array.isArray(s?.calls));
+  if (steps.length === 0) return null;
 
-  const callCount = trace.reduce((n, step) => n + step.calls.length, 0);
-  const stepLabel = `${trace.length} ${trace.length === 1 ? "step" : "steps"}`;
+  const callCount = steps.reduce((n, step) => n + step.calls.length, 0);
+  const stepLabel = `${steps.length} ${steps.length === 1 ? "step" : "steps"}`;
   const callLabel = `${callCount} ${callCount === 1 ? "call" : "calls"}`;
 
   return (
@@ -35,7 +38,7 @@ export function SqlTraceCard({ trace }: { trace: ToolTraceStep[] }) {
 
       {open && (
         <div className="space-y-3 border-t px-3 py-3">
-          {trace.map((step, i) => (
+          {steps.map((step, i) => (
             <Step key={i} step={step} index={i} />
           ))}
         </div>
