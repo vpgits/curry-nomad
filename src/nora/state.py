@@ -27,6 +27,19 @@ from nora.schemas import (
 )
 
 
+def reset_or_extend(current: list, update) -> list:
+    """Reducer for a fan-in list that also has to be *resettable* across loop iterations.
+
+    Within one superstep it extends (gathering parallel `Send` worker outputs, like
+    `operator.add`). But the evaluator-optimizer loop re-runs the storyboard → shot fan-out on
+    each revision, so before regenerating we must clear stale prompts. Returning `None` from a
+    node resets the list to empty; returning a list extends it.
+    """
+    if update is None:
+        return []
+    return (current or []) + list(update)
+
+
 class OrchestratorState(TypedDict):
     """Top-level router state."""
 
@@ -45,13 +58,15 @@ class MarketingState(TypedDict):
 
     request: str
     product_hint: str | None
+    product_facts: NotRequired[dict]  # the chosen product's real DB row (grounding)
     brand_voice: str
     concepts: Annotated[list[ConceptIdea], operator.add]  # parallel ideate (gather)
     chosen_concept: NotRequired[ConceptIdea]
     script_beats: NotRequired[list[ScriptBeat]]
     approved: NotRequired[bool]
     shots: NotRequired[list[Shot]]
-    shot_prompts: Annotated[list[ShotPrompt], operator.add]  # Send fan-in (gather)
+    # Send fan-in (gather), but resettable so revisions don't accumulate stale prompts.
+    shot_prompts: Annotated[list[ShotPrompt], reset_or_extend]
     critique: NotRequired[Critique]
     revision_count: int
     brief: NotRequired[VideoBrief]

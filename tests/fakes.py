@@ -8,6 +8,8 @@ corrected one, then a final answer, and the real ToolNode + SpiceDB do the rest.
 
 from __future__ import annotations
 
+import threading
+
 from langchain_core.messages import AIMessage
 
 
@@ -41,3 +43,48 @@ class ScriptedChatModel:
         msg = self._messages[self._i]
         self._i += 1
         return msg
+
+
+class _StructuredRunnable:
+    """What `.with_structured_output(Schema)` returns: `.invoke(...)` pops the next scripted
+    object of that schema from the parent."""
+
+    def __init__(self, parent: ScriptedStructuredModel, schema):
+        self._parent = parent
+        self._schema = schema
+
+    def invoke(self, prompt, config=None, **kwargs):  # noqa: ARG002
+        return self._parent._next(self._schema)
+
+
+class ScriptedStructuredModel:
+    """A fake model for the marketing workflow.
+
+    - `.with_structured_output(Schema).invoke(...)` returns the next scripted object for that
+      schema (thread-safe; ideation runs workers in parallel).
+    - `.invoke(...)` returns a plain AIMessage (used for free-text shot prompts).
+
+    Queues "repeat the last item" once down to a single entry, so loop iterations and parallel
+    fan-outs don't run the script dry — tests assert on structure, not scripted identity.
+    """
+
+    def __init__(self, by_type: dict, shot_text: str = "A warm cinematic Sri Lankan kitchen."):
+        self._by_type = {k: list(v) for k, v in by_type.items()}
+        self._shot_text = shot_text
+        self._lock = threading.Lock()
+
+    def bind_tools(self, tools, **kwargs):  # noqa: ARG002
+        return self
+
+    def with_structured_output(self, schema, **kwargs):  # noqa: ARG002
+        return _StructuredRunnable(self, schema)
+
+    def invoke(self, prompt, config=None, **kwargs):  # noqa: ARG002
+        return AIMessage(content=self._shot_text)
+
+    def _next(self, schema):
+        with self._lock:
+            queue = self._by_type.get(schema)
+            if not queue:
+                raise AssertionError(f"no scripted response for {getattr(schema, '__name__', schema)}")
+            return queue.pop(0) if len(queue) > 1 else queue[0]
