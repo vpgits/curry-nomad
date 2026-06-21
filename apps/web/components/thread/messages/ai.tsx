@@ -91,9 +91,11 @@ export function AssistantMessage({
 
         {text && <MarkdownText>{text}</MarkdownText>}
 
-        {toolCalls.map((tc, i) => (
-          <ToolStep key={tc.id ?? i} call={tc} result={resultFor(tc.id)} />
-        ))}
+        {toolCalls.length > 0 && (
+          // One AI message's tool calls = one step. Calls in the same message ran in PARALLEL
+          // (ToolNode fires them together); a later message is a SEQUENTIAL step. Thread them.
+          <ToolStepGroup calls={toolCalls} resultFor={resultFor} continuation={continuation} />
+        )}
 
         {brief && <VideoBriefCard brief={brief} />}
 
@@ -141,6 +143,52 @@ export function AssistantMessage({
             </button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// One STEP of the agent's work, drawn on a thread rail. The calls in this step ran in parallel
+// (they branch off a fork node); a `continuation` step had a prior step, so the rail extends up to
+// connect to it (sequential). This is the parallel-vs-sequential "threading".
+function ToolStepGroup({
+  calls,
+  resultFor,
+  continuation,
+}: {
+  calls: ToolCall[];
+  resultFor: (id?: string) => Message | undefined;
+  continuation: boolean;
+}) {
+  const parallel = calls.length > 1;
+  const label = parallel
+    ? `ran ${calls.length} in parallel`
+    : continuation
+      ? "then"
+      : "ran 1 call";
+  return (
+    <div className="relative pl-5">
+      {/* the thread rail — extends upward into the gap for continuation steps so the rail of the
+          previous step connects to this one (sequential), giving a continuous timeline. */}
+      <div
+        className={cn(
+          "absolute left-2 w-px -translate-x-1/2 bg-border",
+          continuation ? "-top-6 bottom-2" : "top-1.5 bottom-2",
+        )}
+      />
+      {/* fork node sitting on the rail, + the step label */}
+      <div className="relative mb-1.5 flex items-center text-[11px] font-medium text-muted-foreground">
+        <span className="absolute left-2 top-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-border bg-background" />
+        {label}
+      </div>
+      {/* the calls — branches off the fork (each connected to the rail by a short tick) */}
+      <div className="space-y-1.5">
+        {calls.map((c, i) => (
+          <div key={c.id ?? i} className="relative">
+            <span className="absolute top-[13px] left-[-12px] h-px w-3 bg-border" />
+            <ToolStep call={c} result={resultFor(c.id)} />
+          </div>
+        ))}
       </div>
     </div>
   );
