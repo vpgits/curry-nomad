@@ -1,12 +1,14 @@
-# The whole Nora app in containers: `langgraph dev` backend + store seed + web UI.
+# The whole Nora app in containers: `langgraph dev` backend + store seed + operations API + web UI.
 #
 #   cp .env.example .env          # add OPENAI_API_KEY (the backend won't boot without it)
-#   docker compose up --build     # → open http://localhost:3000
+#   docker compose up --build     # → chat at http://localhost:3000, inventory at /inventory
 #
-# Flow: browser → web (:3000) → backend (:2024, the `nora` graph over the Agent Protocol via
-#       `langgraph dev`). The dev server keeps state in-memory (no Postgres), so threads/store
-#       reset on restart — the `seed` one-shot reloads brand voice + metric definitions into the
-#       Store once the API is healthy.
+# Flow:
+#   browser → web (:3000) → backend (:2024, the `nora` graph via `langgraph dev`) for chat, and
+#   browser → web (/inventory) → ops-api (:8000, the deterministic operations REST API) for
+#   inventory + orders + delivery routing. Both backends keep state in-memory / in an ephemeral
+#   SQLite, so they reset on restart: the `seed` one-shot reloads the Store, and `ops-api` rebuilds
+#   its writable DB on start. The operations system has NO LLM, so ops-api needs no API key.
 #
 # Optional tracing: `langgraph dev` integrates LangSmith natively — set LANGSMITH_TRACING=true
 # and LANGSMITH_API_KEY in .env and runs show up in LangSmith automatically.
@@ -44,6 +46,29 @@ services:
       backend:
         condition: service_healthy
 
+  # The deterministic operations system (inventory + orders + delivery routing). Reuses the
+  # backend image (built with the `operations` extra); seeds its writable, ephemeral SQLite on
+  # start, then serves the REST API the web /inventory page calls. No LLM → no API key needed.
+  ops-api:
+    image: curry-nomad-backend:latest
+    restart: unless-stopped
+    command:
+      - sh
+      - -c
+      - "python -m nora.operations.seed && exec uvicorn nora.operations.api:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      # Only to ensure the shared backend image is built first; ops-api is otherwise independent.
+      backend:
+        condition: service_started
+
   web:
     build:
       context: ./apps/web
@@ -51,10 +76,13 @@ services:
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:2024}
         NEXT_PUBLIC_ASSISTANT_ID: ${NEXT_PUBLIC_ASSISTANT_ID:-nora}
+        NEXT_PUBLIC_OPS_API_URL: ${NEXT_PUBLIC_OPS_API_URL:-http://localhost:8000}
     image: curry-nomad-web:latest
     restart: unless-stopped
     ports:
       - "3000:3000"
     depends_on:
       backend:
+        condition: service_started
+      ops-api:
         condition: service_started

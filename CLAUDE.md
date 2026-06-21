@@ -134,11 +134,14 @@ the stack with `docker-compose.langfuse.yml` (UI on :3001). The **full web app**
 LangSmith instead — `langgraph dev` integrates it natively, so `LANGSMITH_TRACING=true` +
 `LANGSMITH_API_KEY` in the env is all the web path needs (no code), grouping runs by thread.
 
-**Running the whole app.** The root `docker-compose.yml` builds + runs the slimmed stack (the
-`langgraph dev` backend + one-shot Store `seed` + Next.js `web`; no Postgres): `docker compose up
---build` → the UI on :3000. `Dockerfile` (backend, `langgraph dev`) and `apps/web/Dockerfile`
-(Next.js) back it; the web image pins pnpm via `packageManager`. The in-repo alternative is
-`langgraph dev` + `pnpm dev`.
+**Running the whole app.** The root `docker-compose.yml` builds + runs the stack (the `langgraph
+dev` backend + one-shot Store `seed` + the `ops-api` operations service + Next.js `web`; no
+Postgres): `docker compose up --build` → chat at :3000, inventory at :3000/inventory. The `ops-api`
+service reuses the backend image (built with `--extra operations`), seeds its writable ephemeral
+SQLite on start, and serves the operations REST API on :8000 — no LLM, so no API key. `Dockerfile`
+(backend, `langgraph dev`) and `apps/web/Dockerfile` (Next.js) back it; the web image pins pnpm via
+`packageManager`. The in-repo alternative is `langgraph dev` + `uvicorn nora.operations.api:app`
++ `pnpm dev`.
 
 ## Testing approach
 

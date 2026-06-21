@@ -28,14 +28,16 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 # 1) Dependencies only (cached layer) — needs just the manifests + lockfile.
 #    Keep the dev group so `langgraph-cli[inmem]` (which powers `langgraph dev`) is installed.
+#    `--extra operations` adds fastapi/uvicorn so this one image can ALSO serve the operations
+#    REST API — the `ops-api` compose service reuses this image with a different command.
 COPY pyproject.toml uv.lock ./
-RUN uv sync --no-install-project --frozen
+RUN uv sync --no-install-project --frozen --extra operations
 
 # 2) The project itself — hatchling builds the `nora` wheel, so it needs the
 #    package source and the README referenced by pyproject's `readme = ...`.
 COPY apps/nora ./apps/nora
 COPY langgraph.json README.md ./
-RUN uv sync --frozen
+RUN uv sync --frozen --extra operations
 
 # -----------------------------
 # Runtime: slim image with the venv + what `langgraph dev` needs at run time

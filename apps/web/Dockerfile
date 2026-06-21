@@ -26,8 +26,12 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ARG NEXT_PUBLIC_API_URL=http://localhost:2024
 ARG NEXT_PUBLIC_ASSISTANT_ID=nora
+# The /inventory page calls the operations REST API directly from the browser, so this is the
+# host-published address (http://localhost:8000), not the compose-internal service name.
+ARG NEXT_PUBLIC_OPS_API_URL=http://localhost:8000
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
     NEXT_PUBLIC_ASSISTANT_ID=$NEXT_PUBLIC_ASSISTANT_ID \
+    NEXT_PUBLIC_OPS_API_URL=$NEXT_PUBLIC_OPS_API_URL \
     NEXT_TELEMETRY_DISABLED=1
 RUN pnpm build
 
