@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 
 import pytest
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
@@ -18,7 +18,7 @@ from nora.analytics.graph import build_analytics_graph
 from nora.marketing.graph import build_marketing_graph
 from nora.orchestrator import build_orchestrator
 from nora.schemas import RouteDecision
-from tests.fakes import ScriptedChatModel, ScriptedStructuredModel, ai_final
+from tests.fakes import ScriptedChatModel, ScriptedStructuredModel, ai_final, ai_tool_call
 from tests.test_marketing_graph import _passing_model
 
 
@@ -46,6 +46,36 @@ def test_data_question_routes_to_analytics():
     result = orch.invoke({"messages": [HumanMessage("what's our top product?")]}, _cfg("a1"))
     assert result["route"]["capability"] == "analytics"
     assert "Ceylon Cinnamon" in result["messages"][-1].content
+
+
+def test_analytics_subgraph_streams_into_top_level_state_and_post_builds_trace():
+    """Native-subgraph wiring: the analytics agent is a real subgraph node, so its tool-loop
+    messages flow into the orchestrator's `messages` channel (what CopilotKit streams live), and
+    `analytics_post` distils this turn's calls into `tool_trace` on the final answer."""
+    orch = build_orchestrator(
+        router_model=_router(RouteDecision(capability="analytics", reason="data question")),
+        analytics_graph=build_analytics_graph(
+            model=ScriptedChatModel(
+                [
+                    ai_tool_call("run_sql", {"query": "SELECT 1 AS x"}, "c1"),
+                    ai_final("There is exactly one."),
+                ]
+            )
+        ),
+        marketing_graph=build_marketing_graph(model=_passing_model(), auto_approve=True),
+        checkpointer=InMemorySaver(),
+    )
+    result = orch.invoke({"messages": [HumanMessage("how many?")]}, _cfg("an-trace"))
+
+    # The subgraph's intermediate tool call + its result now persist in top-level state (not
+    # hidden behind an imperative .invoke()) — this is what lets the adapter stream them.
+    assert any(isinstance(m, ToolMessage) for m in result["messages"])
+    assert any(getattr(m, "tool_calls", None) for m in result["messages"])
+    # analytics_post enriched the final answer with the scoped trace.
+    final = result["messages"][-1]
+    assert final.content == "There is exactly one."
+    trace = final.additional_kwargs["tool_trace"]
+    assert trace[0]["calls"][0]["name"] == "run_sql"
 
 
 def test_marketing_request_routes_and_carries_product_hint():

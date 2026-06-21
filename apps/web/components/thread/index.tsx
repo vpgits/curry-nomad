@@ -1,16 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
-import { ArrowDown, ArrowUp, ChefHat, Sparkles, Square } from "lucide-react";
+import { ArrowDown, ArrowUp, ChefHat, Square } from "lucide-react";
 import type { Message } from "@langchain/langgraph-sdk";
 
-import { AppSidebar } from "@/components/app-sidebar";
+import { AppShell } from "@/components/app-shell";
 import { ApprovalCard } from "@/components/ApprovalCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
-import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import type { ReviewDecision, ReviewInterrupt } from "@/lib/types";
 import { useStreamContext } from "@/providers/Stream";
 import { AssistantMessage, NoraAvatar } from "./messages/ai";
@@ -59,82 +56,63 @@ export function Thread() {
   };
 
   return (
-    <SidebarProvider className="h-dvh overflow-hidden">
-      <AppSidebar />
-      <SidebarInset className="min-w-0">
-        <header className="shrink-0 border-b bg-background/80 backdrop-blur">
-          <div className="flex items-center gap-2 px-4 py-3">
-            <SidebarTrigger className="-ml-1" />
-            <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-5" />
-            <div className="min-w-0">
-              <h1 className="text-sm leading-tight font-semibold">
-                Nora · <span className="text-muted-foreground">Curry Nomad</span>
-              </h1>
-              <p className="truncate text-xs text-muted-foreground">
-                One assistant, two paradigms — an analytics agent and a marketing workflow.
-              </p>
-            </div>
-            <Link
-              href="/copilot"
-              className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-              title="Open the CopilotKit variant"
+    <AppShell
+      title={
+        <>
+          Nora · <span className="text-muted-foreground">Curry Nomad</span>
+        </>
+      }
+      subtitle="One assistant, two paradigms — an analytics agent and a marketing workflow."
+    >
+      <MessageList
+        messages={messages}
+        isLoading={isLoading}
+        lastIsHuman={lastIsHuman}
+        interrupt={interrupt}
+        isEmpty={isEmpty}
+        onDecide={decide}
+        onPick={send}
+      />
+
+      <footer className="shrink-0 border-t bg-background/80 backdrop-blur">
+        <form
+          className="mx-auto flex max-w-3xl items-center gap-2 px-4 py-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            send(input);
+          }}
+        >
+          <Input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Ask about the business, or ask for a video ad…"
+            className="h-11 rounded-xl"
+          />
+          {isLoading ? (
+            <Button
+              type="button"
+              size="icon"
+              variant="outline"
+              onClick={() => stream.stop()}
+              className="size-11 shrink-0 rounded-xl"
+              aria-label="Stop"
             >
-              <Sparkles className="size-3.5" />
-              <span className="hidden sm:inline">CopilotKit</span>
-            </Link>
-          </div>
-        </header>
-
-        <MessageList
-          messages={messages}
-          isLoading={isLoading}
-          lastIsHuman={lastIsHuman}
-          interrupt={interrupt}
-          isEmpty={isEmpty}
-          onDecide={decide}
-          onPick={send}
-        />
-
-        <footer className="shrink-0 border-t bg-background/80 backdrop-blur">
-          <form
-            className="mx-auto flex max-w-3xl items-center gap-2 px-4 py-4"
-            onSubmit={(e) => {
-              e.preventDefault();
-              send(input);
-            }}
-          >
-            <Input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask about the business, or ask for a video ad…"
-              className="h-11 rounded-xl"
-            />
-            {isLoading ? (
-              <Button
-                type="button"
-                size="icon"
-                variant="outline"
-                onClick={() => stream.stop()}
-                className="size-11 shrink-0 rounded-xl"
-                aria-label="Stop"
-              >
-                <Square className="size-4" />
-              </Button>
-            ) : (
-              <Button
-                type="submit"
-                size="icon"
-                disabled={!input.trim()}
-                className="size-11 shrink-0 rounded-xl"
-                aria-label="Send message"
-              >
-                <ArrowUp className="size-5" />
-              </Button>
-            )}
-          </form>
-        </footer>
-      </SidebarInset>
-    </SidebarProvider>
+              <Square className="size-4" />
+            </Button>
+          ) : (
+            <Button
+              type="submit"
+              size="icon"
+              disabled={!input.trim()}
+              className="size-11 shrink-0 rounded-xl"
+              aria-label="Send message"
+            >
+              <ArrowUp className="size-5" />
+            </Button>
+          )}
+        </form>
+      </footer>
+    </AppShell>
   );
 }
 

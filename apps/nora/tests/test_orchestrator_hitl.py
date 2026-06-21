@@ -38,9 +38,10 @@ class _FakeRouter:
 
 
 class _StubAnalytics:
-    """Never invoked on the marketing path."""
+    """Never invoked on the marketing path. Callable so it's a valid graph node (the analytics
+    subgraph is now added via `add_node`), but it raises if the marketing path ever reaches it."""
 
-    def invoke(self, *args, **kwargs):  # noqa: ARG002
+    def __call__(self, *args, **kwargs):  # noqa: ARG002
         raise AssertionError("analytics subgraph should not run for a marketing request")
 
 

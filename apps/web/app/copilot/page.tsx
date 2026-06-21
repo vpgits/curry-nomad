@@ -1,45 +1,125 @@
 "use client";
 
-import Link from "next/link";
-import { ArrowLeft, ChefHat } from "lucide-react";
-import { CopilotKit, CopilotChat } from "@copilotkit/react-core/v2";
+import { useEffect, useRef, useState } from "react";
+import {
+  CopilotKit,
+  CopilotChat,
+  useAgent,
+  useInterrupt,
+  UseAgentUpdate,
+} from "@copilotkit/react-core/v2";
 import "@copilotkit/react-core/v2/styles.css";
+import { useQueryState } from "nuqs";
+
+import { AppShell } from "@/components/app-shell";
+import { ApprovalCard } from "@/components/ApprovalCard";
+import type { ReviewDecision, ReviewInterrupt } from "@/lib/types";
+import { sleep, tagThread } from "@/lib/threads";
+import { useThreads } from "@/providers/Thread";
 
 // The CopilotKit variant of the Nora chat, for side-by-side comparison with the custom useStream
 // UI at `/`. It talks to the SAME Nora graph on Aegra, via the CopilotKit runtime route
 // (app/api/copilotkit) → AG-UI → LangGraphAgent → Aegra. useSingleEndpoint={false} matches the
-// multi-route Hono handler in that route.
+// multi-route Hono handler in that route. The shared AppShell sidebar lists threads from both
+// surfaces; clicking a CopilotKit thread routes here with ?threadId=… (see AppSidebar).
 export default function CopilotPage() {
+  // threadId in the URL: set → load that conversation; null → a fresh chat. The sidebar writes it.
+  const [threadId] = useQueryState("threadId");
   return (
     <CopilotKit runtimeUrl="/api/copilotkit" useSingleEndpoint={false}>
-      <div className="flex h-dvh flex-col">
-        <header className="shrink-0 border-b bg-background/80 backdrop-blur">
-          <div className="mx-auto flex max-w-3xl items-center gap-3 px-4 py-3">
-            <Link
-              href="/"
-              className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
-              aria-label="Back to the custom UI"
-            >
-              <ArrowLeft className="size-4" />
-            </Link>
-            <div className="flex size-9 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-              <ChefHat className="size-5" />
-            </div>
-            <div className="min-w-0">
-              <h1 className="text-sm leading-tight font-semibold">
-                Nora · <span className="text-muted-foreground">CopilotKit</span>
-              </h1>
-              <p className="truncate text-xs text-muted-foreground">
-                Same Nora backend (Aegra), rendered with CopilotKit over AG-UI.
-              </p>
-            </div>
-          </div>
-        </header>
-
+      {/* Both hooks must live inside <CopilotKit> to observe the active agent run. */}
+      <MarketingReviewInterrupt />
+      <CopilotThreadTagger />
+      <AppShell
+        title={
+          <>
+            Nora · <span className="text-muted-foreground">CopilotKit</span>
+          </>
+        }
+        subtitle="Same Nora backend (Aegra), rendered with CopilotKit over AG-UI."
+      >
         <div className="min-h-0 flex-1">
-          <CopilotChat className="h-full" />
+          {/* key remounts the chat when switching threads so it reconnects cleanly. */}
+          <CopilotChat
+            key={threadId ?? "new"}
+            threadId={threadId ?? undefined}
+            hasExplicitThreadId={!!threadId}
+            className="h-full"
+          />
         </div>
-      </div>
+      </AppShell>
     </CopilotKit>
+  );
+}
+
+// Tags each CopilotKit-created thread with source "copilot" (+ a title) once its first run
+// finishes, so the shared history sidebar can label it and route clicks back here — mirrors what
+// StreamProvider does for the `/` surface. Then refetches the thread list so it appears labelled.
+function CopilotThreadTagger() {
+  const { agent } = useAgent({ updates: [UseAgentUpdate.OnRunStatusChanged] });
+  const { getThreads, setThreads } = useThreads();
+  const tagged = useRef<Set<string>>(new Set());
+  const wasRunning = useRef(false);
+
+  const running = agent.isRunning;
+  const threadId = agent.threadId;
+
+  useEffect(() => {
+    const justFinished = wasRunning.current && !running;
+    wasRunning.current = running;
+    if (!justFinished || !threadId || tagged.current.has(threadId)) return;
+    tagged.current.add(threadId);
+    // A just-created thread isn't immediately searchable; tag after a beat, then refresh the list.
+    sleep()
+      .then(() => tagThread(threadId, "copilot"))
+      .then(() => getThreads())
+      .then(setThreads)
+      .catch((err) => {
+        tagged.current.delete(threadId); // let a later run retry
+        console.error(err);
+      });
+  }, [running, threadId, getThreads, setThreads]);
+
+  return null;
+}
+
+// The marketing workflow pauses at a human-review interrupt() before the expensive creative steps.
+// useInterrupt surfaces that backend interrupt to the client; `event.value` is the same
+// ReviewInterrupt payload the `/` UI reads, and `resolve(decision)` resumes the run with a
+// Command(resume=decision) — i.e. the ReviewDecision read by the marketing human_review node. We
+// render the SAME ApprovalCard the canonical `/` UI uses; renderInChat (the default) draws it
+// inline in the chat thread. Without this, an ad request on `/copilot` would stall at the gate.
+function MarketingReviewInterrupt() {
+  useInterrupt({
+    render: ({ event, resolve }) => (
+      <ReviewInterruptCard
+        payload={event.value as ReviewInterrupt}
+        onDecide={(decision) => resolve(decision)}
+      />
+    ),
+  });
+  return null;
+}
+
+// Owns the post-click "submitting" state so the approve/edit/reject buttons disable after the
+// first decision — resolve() resumes the run exactly once, then the interrupt clears and this
+// unmounts. (useInterrupt re-invokes render on each parent render; a real component keeps state.)
+function ReviewInterruptCard({
+  payload,
+  onDecide,
+}: {
+  payload: ReviewInterrupt;
+  onDecide: (decision: ReviewDecision) => void;
+}) {
+  const [submitting, setSubmitting] = useState(false);
+  return (
+    <ApprovalCard
+      payload={payload}
+      disabled={submitting}
+      onDecision={(decision) => {
+        setSubmitting(true);
+        onDecide(decision);
+      }}
+    />
   );
 }

@@ -57,7 +57,13 @@ def build_marketing_graph(
     settings = settings or get_settings()
     if model is None:
         # Creative steps want some variation; the critic/assembler tolerate it fine.
-        model = init_chat_model(settings.model, temperature=0.7)
+        # disable_streaming: every marketing node is a with_structured_output call (plus the plain
+        # shot-prompt text), all consumed into typed state — the user-facing output is the
+        # orchestrator's hand-built summary message, not an LLM token stream. Over Aegra's `messages`
+        # stream those internal calls emit orphan TOOL_CALL_ARGS the CopilotKit AG-UI adapter can't
+        # place ("No message found"), so the marketing path must stay off the token stream too. No
+        # UX cost — nothing here is streamed to the user. See orchestrator.py for the full rationale.
+        model = init_chat_model(settings.model, temperature=0.7, disable_streaming=True)
     if spice_db is None:
         spice_db = build_spice_db(settings)
 
