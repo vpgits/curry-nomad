@@ -59,6 +59,13 @@ env vars (`NORA_MODEL`, `NORA_ROUTER_MODEL`, `NORA_EMBEDDING_MODEL`) and supplyi
 key. Anthropic needs `uv sync --extra anthropic` first. The embedding model defaults to OpenAI, so
 the semantic Store still needs `OPENAI_API_KEY` even on a non-OpenAI chat model.
 
+**Reasoning chain (opt-in).** Set `NORA_THINKING_BUDGET` to a token budget (e.g. `2048`) *and* an
+Anthropic `NORA_MODEL` (e.g. `anthropic:claude-sonnet-4-6`) to turn on extended thinking for the
+analytics agent. Its reasoning streams into the chat as `thinking` content blocks, rendered inline by
+the web UI as a collapsible "reasoning" card next to the tool steps (`analytics/graph.py` builds the
+model with `thinking=` + `temperature=1`; the frontend pulls it via `getReasoningString`). Default
+`0` = off, so the gpt-4o path (which emits no reasoning) is unchanged.
+
 ### Web stack (optional)
 ```bash
 uv run langgraph dev --allow-blocking            # serve `nora` over the Agent Protocol on :2024 (in-memory; needs OPENAI_API_KEY)

@@ -57,6 +57,9 @@ export interface ToolTraceStep {
 export interface NoraAdditionalKwargs {
   tool_trace?: ToolTraceStep[];
   video_brief?: VideoBrief;
+  // Fallback chain-of-thought location: Anthropic surfaces reasoning as `thinking` content blocks
+  // (handled in getReasoningString), but some providers (e.g. DeepSeek) stash it here instead.
+  reasoning_content?: string;
 }
 
 // Payload emitted by the marketing human_review node's interrupt().

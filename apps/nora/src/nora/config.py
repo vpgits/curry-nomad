@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     router_model: str = "openai:gpt-4o-mini"  # cheap classifier
     embedding_model: str = "openai:text-embedding-3-small"  # Store index embedder
     embedding_dims: int = 1536  # must match the embedding model
+    # Optional Anthropic extended-thinking budget for the analytics agent (NORA_THINKING_BUDGET).
+    # 0 = off (the default keeps gpt-4o behaviour unchanged). When > 0 *and* the analytics model is
+    # an Anthropic one, the agent enables extended thinking with this token budget, so its reasoning
+    # chain streams into the chat as `thinking` content blocks (see analytics/graph.py). Other
+    # providers (e.g. OpenAI gpt-4o) ignore it — they don't emit visible reasoning.
+    thinking_budget: int = 0
 
     # --- Data ---
     db_path: Path = _DEFAULT_DB_PATH

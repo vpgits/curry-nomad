@@ -1,14 +1,23 @@
 "use client";
 
 import { useState, type ComponentProps, type ReactNode } from "react";
-import { ChefHat, Check, ChevronRight, Copy, Database, RefreshCw, Table2 } from "lucide-react";
+import {
+  Brain,
+  ChefHat,
+  Check,
+  ChevronRight,
+  Copy,
+  Database,
+  RefreshCw,
+  Table2,
+} from "lucide-react";
 import type { Message } from "@langchain/langgraph-sdk";
 
 import { LoadExternalComponent } from "@langchain/langgraph-sdk/react-ui";
 
 import { AnalyticsDashboard } from "@/components/AnalyticsDashboard";
 import { VideoBriefCard } from "@/components/VideoBriefCard";
-import { cn, getContentString, getNoraKwargs } from "@/lib/utils";
+import { cn, getContentString, getNoraKwargs, getReasoningString } from "@/lib/utils";
 import { useStreamContext } from "@/providers/Stream";
 import { MarkdownText } from "../markdown";
 import { BranchSwitcher } from "./shared";
@@ -49,8 +58,14 @@ export function AssistantMessage({
   const parentCheckpoint = meta?.firstSeenState?.parent_checkpoint;
 
   const text = getContentString(message.content);
+  const reasoning = getReasoningString(message);
   const { video_brief: brief } = getNoraKwargs(message);
   const toolCalls = (message as { tool_calls?: ToolCall[] }).tool_calls ?? [];
+  // The reasoning chain is still "thinking" while this is the latest message, the turn is running,
+  // and nothing's resolved on it yet (no answer text, no tool decision). Once text or tool calls
+  // land — here or on a later message — the chain has resolved, so the card rests at "thought".
+  const isLatest = stream.messages[stream.messages.length - 1]?.id === message.id;
+  const reasoningRunning = isLoading && isLatest && !text && toolCalls.length === 0;
   // Pair each tool call with its result ToolMessage (matched by id) so a call + its result render
   // as one collapsible card — the ToolMessages themselves are consumed here, not rendered loose.
   const resultFor = (id?: string) =>
@@ -88,6 +103,11 @@ export function AssistantMessage({
             Nora
           </div>
         )}
+
+        {/* The model's reasoning chain (Anthropic extended thinking) — drawn before the answer/
+            tool steps it produced. Empty for non-reasoning models (e.g. gpt-4o), so it renders
+            nothing by default. */}
+        {reasoning && <ReasoningStep reasoning={reasoning} running={reasoningRunning} />}
 
         {text && <MarkdownText>{text}</MarkdownText>}
 
@@ -144,6 +164,39 @@ export function AssistantMessage({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// The model's reasoning chain (Anthropic extended thinking), as a thin collapsible card matching
+// the tool-step cards it sits beside. Collapsed by default (the chain can be long); the header
+// pulses "thinking…" while it's still streaming, then rests at "thought". Expanding reveals the raw
+// chain-of-thought. Only mounted when there's reasoning to show, so non-reasoning models render
+// nothing.
+function ReasoningStep({ reasoning, running }: { reasoning: string; running: boolean }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="overflow-hidden rounded-lg border bg-muted/30 text-xs">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left font-mono text-muted-foreground transition-colors hover:bg-muted/50"
+      >
+        <ChevronRight className={cn("size-3 shrink-0 transition-transform", open && "rotate-90")} />
+        <Brain className="size-3 shrink-0 text-muted-foreground/70" />
+        <span className="font-medium text-foreground/80">reasoning</span>
+        <span className={cn("truncate text-muted-foreground/80", running && "animate-pulse")}>
+          · {running ? "thinking…" : "thought"}
+        </span>
+      </button>
+
+      {open && (
+        <div className="border-t bg-background/40 px-2.5 py-2">
+          <pre className="max-h-48 overflow-auto font-mono text-[11px] break-words whitespace-pre-wrap text-muted-foreground italic">
+            {reasoning || "…"}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }

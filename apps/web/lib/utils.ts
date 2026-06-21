@@ -23,3 +23,24 @@ export function getContentString(content: Message["content"]): string {
 export function getNoraKwargs(message: Message): NoraAdditionalKwargs {
   return (message as { additional_kwargs?: NoraAdditionalKwargs }).additional_kwargs ?? {};
 }
+
+// Pull just the model's reasoning chain out of a message. Anthropic extended thinking (and other
+// reasoning models) emit chain-of-thought as content blocks separate from the answer — type
+// "thinking" (Anthropic) or "reasoning" (standard content blocks) — so getContentString ignores it
+// and the answer text stays clean. Falls back to additional_kwargs.reasoning_content. Returns ""
+// when the model emits no reasoning (e.g. the default gpt-4o), so the UI simply renders nothing.
+export function getReasoningString(message: Message): string {
+  const content = message.content;
+  let out = "";
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (typeof block === "string") continue;
+      const b = block as { type?: string; thinking?: string; reasoning?: string };
+      if (b.type === "thinking" && b.thinking) out += b.thinking;
+      else if (b.type === "reasoning" && b.reasoning) out += b.reasoning;
+    }
+  }
+  if (out) return out;
+  const reasoning = getNoraKwargs(message).reasoning_content;
+  return typeof reasoning === "string" ? reasoning : "";
+}
