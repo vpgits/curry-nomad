@@ -1,13 +1,12 @@
 "use client";
 
 import { useState, type ComponentProps } from "react";
-import { ChefHat, Check, Copy, RefreshCw, Wrench } from "lucide-react";
+import { ChefHat, Check, Copy, RefreshCw } from "lucide-react";
 import type { Message } from "@langchain/langgraph-sdk";
 
 import { LoadExternalComponent } from "@langchain/langgraph-sdk/react-ui";
 
 import { AnalyticsDashboard } from "@/components/AnalyticsDashboard";
-import { SqlTraceCard } from "@/components/SqlTraceCard";
 import { VideoBriefCard } from "@/components/VideoBriefCard";
 import { cn, getContentString, getNoraKwargs } from "@/lib/utils";
 import { useStreamContext } from "@/providers/Stream";
@@ -26,19 +25,29 @@ export function NoraAvatar() {
   );
 }
 
+// A blank avatar-width spacer, so continuation rows (the agent's tool steps) align under the one
+// Nora avatar at the top of the turn instead of each getting their own.
+function AvatarSpacer() {
+  return <div className="size-8 shrink-0" />;
+}
+
 export function AssistantMessage({
   message,
   isLoading,
+  continuation = false,
 }: {
   message: Message;
   isLoading: boolean;
+  // True when the previous message was also assistant-side (an AI/tool step), so this row joins
+  // the same Nora block (no repeated avatar/header) — the agent's work reads as one turn.
+  continuation?: boolean;
 }) {
   const stream = useStreamContext();
   const meta = stream.getMessagesMetadata(message);
   const parentCheckpoint = meta?.firstSeenState?.parent_checkpoint;
 
   const text = getContentString(message.content);
-  const { tool_trace: toolTrace, video_brief: brief } = getNoraKwargs(message);
+  const { video_brief: brief } = getNoraKwargs(message);
   const toolCalls =
     (message as { tool_calls?: { name: string; args: Record<string, unknown> }[] }).tool_calls ??
     [];
@@ -56,24 +65,28 @@ export function AssistantMessage({
   };
 
   const regenerate = () => {
-    stream.submit(undefined, { checkpoint: parentCheckpoint, streamMode: ["values"] });
+    stream.submit(undefined, {
+      checkpoint: parentCheckpoint,
+      streamMode: ["values"],
+      streamSubgraphs: true,
+    });
   };
 
   return (
     <div className="group flex items-start gap-3">
-      <NoraAvatar />
+      {continuation ? <AvatarSpacer /> : <NoraAvatar />}
       <div className="min-w-0 flex-1 space-y-2">
-        <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-          Nora
-        </div>
+        {!continuation && (
+          <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+            Nora
+          </div>
+        )}
 
         {text && <MarkdownText>{text}</MarkdownText>}
 
         {toolCalls.map((tc, i) => (
           <ToolCall key={i} name={tc.name} args={tc.args} />
         ))}
-
-        {toolTrace && toolTrace.length > 0 && <SqlTraceCard trace={toolTrace} />}
 
         {brief && <VideoBriefCard brief={brief} />}
 
@@ -91,14 +104,15 @@ export function AssistantMessage({
           />
         ))}
 
-        <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-          <BranchSwitcher
-            branch={meta?.branch}
-            branchOptions={meta?.branchOptions}
-            onSelect={(b) => stream.setBranch(b)}
-            disabled={isLoading}
-          />
-          {text && (
+        {/* Actions sit on the message that carries the final text answer, not the tool steps. */}
+        {text && (
+          <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+            <BranchSwitcher
+              branch={meta?.branch}
+              branchOptions={meta?.branchOptions}
+              onSelect={(b) => stream.setBranch(b)}
+              disabled={isLoading}
+            />
             <button
               type="button"
               title="Copy"
@@ -108,35 +122,59 @@ export function AssistantMessage({
             >
               {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
             </button>
-          )}
-          <button
-            type="button"
-            title="Regenerate"
-            aria-label="Regenerate response"
-            disabled={isLoading}
-            onClick={regenerate}
-            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
-          >
-            <RefreshCw className="size-3.5" />
-          </button>
-        </div>
+            <button
+              type="button"
+              title="Regenerate"
+              aria-label="Regenerate response"
+              disabled={isLoading}
+              onClick={regenerate}
+              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+            >
+              <RefreshCw className="size-3.5" />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
+// A run_sql / describe_table call the agent made, streamed live. For run_sql we surface the SQL
+// itself (the interesting bit); other tools show their raw args.
 function ToolCall({ name, args }: { name: string; args: Record<string, unknown> }) {
+  const query = name === "run_sql" ? (args.query as string | undefined) : undefined;
   return (
-    <div
-      className={cn(
-        "inline-flex max-w-full items-center gap-1.5 rounded-lg border bg-muted/40 px-2.5 py-1.5",
-        "font-mono text-xs text-muted-foreground",
+    <div className="rounded-lg border bg-muted/40 px-2.5 py-1.5 font-mono text-xs text-muted-foreground">
+      <div className="flex items-center gap-1.5">
+        <span className="text-muted-foreground/70">▸</span>
+        <span className="font-medium">{name}</span>
+        {!query && <span className="truncate">({JSON.stringify(args)})</span>}
+      </div>
+      {query && (
+        <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words text-foreground/80">
+          {query}
+        </pre>
       )}
-    >
-      <Wrench className="size-3 shrink-0" />
-      <span className="truncate">
-        {name}({JSON.stringify(args)})
-      </span>
+    </div>
+  );
+}
+
+// The result of a tool call (a ToolMessage) — query rows, a table schema, or a SQL error the
+// agent then repairs. Rendered compactly, aligned under the same Nora block.
+export function ToolResultMessage({ message }: { message: Message }) {
+  const result = getContentString(message.content);
+  const name = (message as { name?: string }).name ?? "result";
+  return (
+    <div className="flex items-start gap-3">
+      <AvatarSpacer />
+      <div className="min-w-0 flex-1">
+        <div className="rounded-lg border bg-muted/20 px-2.5 py-1.5 font-mono text-xs text-muted-foreground">
+          <div className="mb-1 font-medium">{name} → result</div>
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-foreground/70">
+            {result}
+          </pre>
+        </div>
+      </div>
     </div>
   );
 }

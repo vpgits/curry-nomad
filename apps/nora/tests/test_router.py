@@ -48,11 +48,11 @@ def test_data_question_routes_to_analytics():
     assert "Ceylon Cinnamon" in result["messages"][-1].content
 
 
-def test_analytics_node_returns_only_final_answer_with_trace():
-    """Imperative-subgraph wiring: the analytics agent is invoked inside the `analytics` node, so
-    only its final answer reaches top-level state — the tool loop is hidden behind `.invoke()` and
-    distilled into a `tool_trace` on that answer (the UI's 'Agent's work' panel), not surfaced as
-    inline messages."""
+def test_analytics_agent_surfaces_its_work_inline():
+    """Subgraph-as-node wiring: the analytics agent is a real graph node, so its tool loop — the
+    run_sql call AND its ToolMessage result — flows into top-level state as inline messages (that's
+    what streams live in the UI with `streamSubgraphs`), ending with the final answer. No trace
+    distillation any more; the agent's work *is* the inline messages."""
     orch = build_orchestrator(
         router_model=_router(RouteDecision(capability="analytics", reason="data question")),
         analytics_graph=build_analytics_graph(
@@ -67,16 +67,21 @@ def test_analytics_node_returns_only_final_answer_with_trace():
         checkpointer=InMemorySaver(),
     )
     result = orch.invoke({"messages": [HumanMessage("how many?")]}, _cfg("an-trace"))
+    messages = result["messages"]
 
-    # The subgraph's intermediate tool call + its ToolMessage stay hidden behind the imperative
-    # .invoke() — top-level state holds only the human turn and the final answer (shown once).
-    assert not any(isinstance(m, ToolMessage) for m in result["messages"])
-    final = result["messages"][-1]
+    # The agent's run_sql call and its ToolMessage result are now inline (not hidden behind an
+    # imperative .invoke()), so the UI can stream the agent's work step by step.
+    assert any(isinstance(m, ToolMessage) for m in messages)
+    assert any(
+        tc["name"] == "run_sql"
+        for m in messages
+        for tc in (getattr(m, "tool_calls", None) or [])
+    )
+    # The turn still ends with the final answer, and there's no distilled trace any more.
+    final = messages[-1]
     assert final.content == "There is exactly one."
     assert not getattr(final, "tool_calls", None)
-    # The hidden tool loop is distilled into a trace on the final answer.
-    trace = final.additional_kwargs["tool_trace"]
-    assert trace[0]["calls"][0]["name"] == "run_sql"
+    assert "tool_trace" not in (final.additional_kwargs or {})
 
 
 def test_marketing_request_routes_and_carries_product_hint():

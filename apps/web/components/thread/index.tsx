@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { ReviewDecision, ReviewInterrupt } from "@/lib/types";
 import { useStreamContext } from "@/providers/Stream";
-import { AssistantMessage, NoraAvatar } from "./messages/ai";
+import { AssistantMessage, NoraAvatar, ToolResultMessage } from "./messages/ai";
 import { HumanMessage } from "./messages/human";
 
 const SUGGESTIONS = [
@@ -39,6 +39,9 @@ export function Thread() {
       { messages: [{ type: "human", content }] },
       {
         streamMode: ["values"],
+        // Stream the analytics agent subgraph's messages too — its run_sql steps and the final
+        // answer flow in live (the subgraph is a real node in the orchestrator graph).
+        streamSubgraphs: true,
         optimisticValues: (prev) => ({
           ...prev,
           messages: [
@@ -52,7 +55,11 @@ export function Thread() {
 
   // Resume the paused marketing workflow with the operator's decision (read by human_review).
   const decide = (decision: ReviewDecision) => {
-    stream.submit(undefined, { command: { resume: decision }, streamMode: ["values"] });
+    stream.submit(undefined, {
+      command: { resume: decision },
+      streamMode: ["values"],
+      streamSubgraphs: true,
+    });
   };
 
   return (
@@ -168,6 +175,10 @@ function MessageList({
         ) : (
           <div className="flex flex-col gap-6">
             {messages.map((message, idx) => {
+              const prev = messages[idx - 1];
+              // Group consecutive assistant-side rows (the agent's tool steps + final answer) under
+              // one Nora block: a row "continues" the turn when the previous message was AI or tool.
+              const continuation = !!prev && (prev.type === "ai" || prev.type === "tool");
               if (message.type === "human") {
                 return (
                   <HumanMessage
@@ -183,8 +194,12 @@ function MessageList({
                     key={message.id ?? idx}
                     message={message}
                     isLoading={isLoading}
+                    continuation={continuation}
                   />
                 );
+              }
+              if (message.type === "tool") {
+                return <ToolResultMessage key={message.id ?? idx} message={message} />;
               }
               return null;
             })}

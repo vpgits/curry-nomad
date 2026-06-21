@@ -58,24 +58,32 @@ DASHBOARD_INSTRUCTIONS = (
 )
 
 
-def _build_dashboard(model, final_message, trace) -> AnalyticsDashboard | None:
+def _sql_results_from_messages(messages: list) -> str:
+    """Collect the run_sql results from the agent's tool messages, for the dashboard's context.
+
+    With the analytics agent running as a subgraph node, its run_sql calls and their ToolMessage
+    results are now inline messages in the thread — pair each run_sql call to its result by id."""
+    run_sql_ids = {
+        tc.get("id")
+        for m in messages
+        for tc in (getattr(m, "tool_calls", None) or [])
+        if tc.get("name") == "run_sql"
+    }
+    parts = []
+    for m in messages:
+        if getattr(m, "tool_call_id", None) in run_sql_ids:
+            content = m.content
+            parts.append(content if isinstance(content, str) else str(content))
+    return "\n\n".join(parts)
+
+
+def _build_dashboard(model, answer: str, query_results: str) -> AnalyticsDashboard | None:
     """Best-effort generative-UI dashboard from the final answer + the SQL the agent ran.
 
     Returns None (and the caller renders nothing) when generation fails or the answer isn't
     dashboard-worthy — generative UI is a nicety, never load-bearing for the text answer."""
-    answer = (
-        final_message.content
-        if isinstance(final_message.content, str)
-        else str(final_message.content)
-    )
     if not answer.strip():
         return None
-    query_results = "\n\n".join(
-        call["result"]
-        for step in trace
-        for call in step["calls"]
-        if call["name"] == "run_sql" and call.get("result")
-    )
     context = f"Answer:\n{answer}"
     if query_results:
         context += f"\n\nQuery results the answer is based on:\n{query_results[:2000]}"
@@ -140,57 +148,26 @@ def build_orchestrator(
         # Store the dump, not the model — graph state is JSON-native (see nora/state.py).
         return Command(goto=decision.capability, update={"route": decision.model_dump()})
 
-    def analytics(state: OrchestratorState, config) -> dict:
-        # Invoke the analytics subgraph with the running conversation; surface its final answer.
-        result = analytics_graph.invoke({"messages": state["messages"]}, config)
-        messages = result["messages"]
+    def analytics_dashboard(state: OrchestratorState) -> dict:
+        # Runs right AFTER the analytics agent subgraph node. The agent's full tool loop — its
+        # run_sql calls, their results, and the streamed final answer — has already flowed into the
+        # top-level thread as inline messages (that's the streaming we want). Here we add the one
+        # thing that isn't a chat message: the generative-UI dashboard, composed from the final
+        # answer + the SQL results the agent saw, pushed via push_ui_message (the useStream UI
+        # renders it via LoadExternalComponent). Best-effort — skips silently if generation fails
+        # (no provider key offline) or nothing is dashboard-worthy; the answer is never blocked on it.
+        if dashboard_model is None:
+            return {}
+        messages = state["messages"]
         final = messages[-1]
-        # The subgraph's intermediate messages (the agent's describe_table/run_sql calls and their
-        # results) never reach the orchestrator's state — we return ONLY the final answer, so the
-        # thread shows the answer once. Distil those calls into a trace on the final message so the
-        # UI can show the agent's work in the collapsible "Agent's work" panel (not as duplicate
-        # inline tool-call chips). Each AIMessage that issued tool calls is one *step* (calls in the
-        # same message ran in parallel); steps run in sequence (each turn sees the previous results —
-        # including a SQL error it then repairs); each call is paired with its result (the matching
-        # ToolMessage) by id. Plain JSON, so it round-trips through strict msgpack (see state.py).
-        results_by_id: dict[str, str] = {}
-        for msg in messages:
-            tool_call_id = getattr(msg, "tool_call_id", None)
-            if tool_call_id is not None:
-                content = msg.content
-                results_by_id[tool_call_id] = content if isinstance(content, str) else str(content)
-
-        trace: list[dict] = []
-        for msg in messages:
-            tool_calls = getattr(msg, "tool_calls", None)
-            if not tool_calls:
-                continue
-            trace.append(
-                {
-                    "calls": [
-                        {
-                            "name": tc["name"],
-                            "args": tc["args"],
-                            "result": results_by_id.get(tc.get("id", ""), ""),
-                        }
-                        for tc in tool_calls
-                    ]
-                }
-            )
-
-        if trace:
-            final.additional_kwargs = {**(final.additional_kwargs or {}), "tool_trace": trace}
-
-        # Generative UI: compose a compact dashboard from the answer (+ the SQL results the agent
-        # saw) and push it as a UI message — the useStream UI renders it via LoadExternalComponent.
-        # Best-effort: skips silently if generation fails (e.g. no provider key offline) or nothing
-        # is dashboard-worthy.
-        dashboard = _build_dashboard(dashboard_model, final, trace) if dashboard_model else None
-        if dashboard is not None:
-            data = dashboard.model_dump()
-            final.additional_kwargs = {**(final.additional_kwargs or {}), "dashboard": data}
-            push_ui_message("analytics_dashboard", data, message=final)
-
+        answer = final.content if isinstance(final.content, str) else str(final.content)
+        dashboard = _build_dashboard(dashboard_model, answer, _sql_results_from_messages(messages))
+        if dashboard is None:
+            return {}
+        data = dashboard.model_dump()
+        # Same id → add_messages updates the final message in place (no duplicate).
+        final.additional_kwargs = {**(final.additional_kwargs or {}), "dashboard": data}
+        push_ui_message("analytics_dashboard", data, message=final)
         return {"messages": [final]}
 
     def marketing(state: OrchestratorState, config) -> dict:
@@ -226,17 +203,21 @@ def build_orchestrator(
 
     builder = StateGraph(OrchestratorState, context_schema=Context)
     builder.add_node("route", route)
-    # The two capabilities are compiled subgraphs invoked imperatively inside these function nodes:
-    # each `.invoke(state, config)` passes config straight through (so a HITL interrupt deep in the
-    # marketing subgraph bubbles up and pauses the whole orchestrator). The analytics node returns
-    # ONLY the final answer to top-level state — the subgraph's tool loop is surfaced via the
-    # "Agent's work" trace panel, not as inline messages.
-    builder.add_node("analytics", analytics)
+    # Analytics is added as a real subgraph NODE (not invoked imperatively): because it's part of
+    # the graph, its messages — the run_sql tool-call steps AND the streamed final answer — flow
+    # live into the top-level thread and render inline (clients opt in with `streamSubgraphs: true`).
+    # `analytics_dashboard` runs right after to attach the generative-UI card from that answer.
+    builder.add_node("analytics", analytics_graph)
+    builder.add_node("analytics_dashboard", analytics_dashboard)
+    # Marketing stays an imperative function node: its state is disjoint from the chat (it produces
+    # a structured brief, not a token-streamed reply), and invoking the subgraph with `config` is
+    # what lets a HITL interrupt() deep inside it bubble up and pause the whole orchestrator.
     builder.add_node("marketing", marketing)
     builder.add_node("clarify", clarify)
     builder.add_edge(START, "route")
-    # route dispatches via Command(goto=...); each capability ends the turn.
-    builder.add_edge("analytics", END)
+    # route dispatches via Command(goto=...); analytics flows through its dashboard, then each ends.
+    builder.add_edge("analytics", "analytics_dashboard")
+    builder.add_edge("analytics_dashboard", END)
     builder.add_edge("marketing", END)
     builder.add_edge("clarify", END)
 

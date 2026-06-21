@@ -73,12 +73,13 @@ def build_analytics_graph(
     """
     settings = settings or get_settings()
     if model is None:
-        # The analytics agent is invoked imperatively by the orchestrator's `analytics` node, which
-        # returns only the final answer to top-level state (its tool loop is surfaced via the
-        # "Agent's work" trace panel, not as inline messages). The `/` useStream UI streams `values`,
-        # so streaming here is harmless and we leave it at the default. (The router/dashboard/
-        # marketing models set disable_streaming — see orchestrator.py.)
-        model = init_chat_model(settings.model, temperature=0)
+        # The analytics agent is added to the orchestrator as a real subgraph *node* (not invoked
+        # imperatively), so its messages stream live into the top-level thread — the tool-call steps
+        # AND the final answer render inline. `streaming=True` makes each LLM call emit token deltas
+        # (the user-facing answer streams token-by-token); the client opts into nested-graph messages
+        # with `streamSubgraphs: true`. (The router/dashboard/marketing models set disable_streaming
+        # — their calls never become user-facing text; see orchestrator.py.)
+        model = init_chat_model(settings.model, temperature=0, streaming=True)
     model_with_tools = model.bind_tools(ANALYTICS_TOOLS)
 
     # The table list is static for a given DB; fetch it once at build time.
