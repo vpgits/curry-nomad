@@ -12,6 +12,7 @@ carries the finishing copy. They're implementation details, not part of the publ
 
 from __future__ import annotations
 
+import json
 from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 
@@ -175,6 +176,17 @@ def make_human_review(settings: Settings, *, auto_approve: bool = False):
                 "script_beats": state["script_beats"],  # already dicts (JSON-native state)
             }
         )
+        # Resume transport-normalization. useStream (`/`) resumes with a structured
+        # Command(resume={"approved": ..., "edited_script": ...}) → `decision` is a dict.
+        # CopilotKit (`/copilot`) resolves an interrupt with a JSON *string*
+        # (useLangGraphInterrupt's `resolve(resolution: string)`), so parse it back to a dict here
+        # — otherwise `bool("{...}")` is truthy for *any* non-empty string and reject/edits break.
+        if isinstance(decision, str):
+            try:
+                decision = json.loads(decision)
+            except (ValueError, TypeError):
+                pass
+
         approved = decision.get("approved", False) if isinstance(decision, dict) else bool(decision)
         if not approved:
             return Command(goto="cancel", update={"approved": False})
