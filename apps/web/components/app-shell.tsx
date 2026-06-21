@@ -8,8 +8,8 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/s
 
 // The app shell shared by every page: the collapsible AppSidebar (brand + cross-page nav +
 // conversation history) plus a SidebarInset that hosts a standard header bar and the page body.
-// `children` are rendered as direct flex children of the inset's column, so a page can pin a
-// footer (`/`) or let content fill the height (`/copilot`) with `flex-1`/`shrink-0` siblings.
+// `children` are rendered as direct flex children of the inset's column, so the page can pin a
+// footer with `flex-1`/`shrink-0` siblings.
 export function AppShell({
   title,
   subtitle,

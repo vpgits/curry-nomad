@@ -38,10 +38,10 @@ export function StreamProvider({ children }: { children: ReactNode }) {
     fetchStateHistory: true,
     onThreadId: (id) => {
       setThreadId(id);
-      // A just-created thread isn't immediately searchable; after a beat, tag it (source "nora" +
-      // title from its first message), then refetch the list so the new thread shows up labelled.
+      // A just-created thread isn't immediately searchable; after a beat, tag it (title from its
+      // first message), then refetch the list so the new thread shows up labelled.
       sleep()
-        .then(() => tagThread(id, "nora"))
+        .then(() => tagThread(id))
         .then(() => getThreads())
         .then(setThreads)
         .catch(console.error);

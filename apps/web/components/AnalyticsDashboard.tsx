@@ -10,9 +10,8 @@ import {
 } from "@/components/ui/card";
 import type { AnalyticsDashboardData } from "@/lib/types";
 
-// The generative-UI dashboard the analytics path composes (schemas.py:AnalyticsDashboard). One
-// component, two renderers: the useStream UI mounts it via LoadExternalComponent; the CopilotKit
-// UI maps it into an A2UI catalog. Props are the dashboard dict verbatim.
+// The generative-UI dashboard the analytics path composes (schemas.py:AnalyticsDashboard). The
+// useStream UI mounts it via LoadExternalComponent. Props are the dashboard dict verbatim.
 export function AnalyticsDashboard({ title, stats = [], table }: AnalyticsDashboardData) {
   if (stats.length === 0 && !table) return null;
 

@@ -108,13 +108,13 @@ def build_orchestrator(
     settings = settings or get_settings()
     if router_model is None:
         # disable_streaming: the router classifies via with_structured_output — a forced tool call
-        # whose parsed result is consumed into `route`, never appended to `messages`. Aegra's
-        # `messages` stream still emits its token/tool-call deltas (it captures every LLM call via
-        # callbacks), so the CopilotKit AG-UI adapter receives TOOL_CALL_ARGS for a message that
-        # never lands and aborts the run ("TOOL_CALL_ARGS: No message found"). Disabling streaming
-        # keeps this internal call off the token stream. It is never user-facing text, so nothing is
-        # lost on either UI. (All four models the platform serves — router, dashboard, marketing,
-        # and the analytics agent — disable streaming for the CopilotKit path; see each for why.)
+        # whose parsed result is consumed into `route`, never appended to `messages`. With streaming
+        # on, Aegra's `messages` stream still emits that internal call's token/tool-call deltas (it
+        # captures every LLM call via callbacks), so the useStream UI would briefly render a phantom
+        # partial message for a result that never lands. Disabling streaming keeps this internal call
+        # off the token stream; it is never user-facing text, so nothing is lost. (The router,
+        # dashboard, and marketing models all disable streaming for this reason; the analytics agent
+        # keeps streaming on because its tokens ARE the user-facing answer.)
         router_model = init_chat_model(settings.router_model, temperature=0, disable_streaming=True)
     if analytics_graph is None:
         analytics_graph = build_analytics_graph(settings=settings, store=store)
@@ -140,37 +140,28 @@ def build_orchestrator(
         # Store the dump, not the model — graph state is JSON-native (see nora/state.py).
         return Command(goto=decision.capability, update={"route": decision.model_dump()})
 
-    def analytics_post(state: OrchestratorState) -> dict:
-        # Runs AFTER the analytics subgraph node. The subgraph is now a real node
-        # (`add_node("analytics", analytics_graph)`), so it streams its tool-loop steps + final
-        # answer straight into the shared `messages` channel — that native subgraph streaming is
-        # what the CopilotKit AG-UI adapter renders live (and the `/` UI types out token-by-token).
-        # Here we only ENRICH the final answer: distil this turn's tool calls into a `tool_trace`
-        # and compose the generative-UI dashboard. Scope to the current turn (messages after the
-        # last human message) so the trace doesn't accumulate prior turns' calls now that the
-        # subgraph's intermediate messages persist in top-level state.
-        messages = state["messages"]
-        last_human = max(
-            (i for i, m in enumerate(messages) if isinstance(m, HumanMessage)), default=-1
-        )
-        turn = messages[last_human + 1 :]
-        if not turn:
-            return {}
-        final = turn[-1]
-
-        # Each AIMessage that issued tool calls is one *step* (calls in the same message ran in
-        # parallel); steps run in sequence (each turn sees the previous results — including a SQL
-        # error it then repairs); each call is paired with its result (the matching ToolMessage) by
-        # id. Plain JSON, so it round-trips through the checkpointer's strict msgpack (see state.py).
+    def analytics(state: OrchestratorState, config) -> dict:
+        # Invoke the analytics subgraph with the running conversation; surface its final answer.
+        result = analytics_graph.invoke({"messages": state["messages"]}, config)
+        messages = result["messages"]
+        final = messages[-1]
+        # The subgraph's intermediate messages (the agent's describe_table/run_sql calls and their
+        # results) never reach the orchestrator's state — we return ONLY the final answer, so the
+        # thread shows the answer once. Distil those calls into a trace on the final message so the
+        # UI can show the agent's work in the collapsible "Agent's work" panel (not as duplicate
+        # inline tool-call chips). Each AIMessage that issued tool calls is one *step* (calls in the
+        # same message ran in parallel); steps run in sequence (each turn sees the previous results —
+        # including a SQL error it then repairs); each call is paired with its result (the matching
+        # ToolMessage) by id. Plain JSON, so it round-trips through strict msgpack (see state.py).
         results_by_id: dict[str, str] = {}
-        for msg in turn:
+        for msg in messages:
             tool_call_id = getattr(msg, "tool_call_id", None)
             if tool_call_id is not None:
                 content = msg.content
                 results_by_id[tool_call_id] = content if isinstance(content, str) else str(content)
 
         trace: list[dict] = []
-        for msg in turn:
+        for msg in messages:
             tool_calls = getattr(msg, "tool_calls", None)
             if not tool_calls:
                 continue
@@ -193,7 +184,7 @@ def build_orchestrator(
         # Generative UI: compose a compact dashboard from the answer (+ the SQL results the agent
         # saw) and push it as a UI message — the useStream UI renders it via LoadExternalComponent.
         # Best-effort: skips silently if generation fails (e.g. no provider key offline) or nothing
-        # is dashboard-worthy. (The CopilotKit UI gets the same data as A2UI; see make_graph notes.)
+        # is dashboard-worthy.
         dashboard = _build_dashboard(dashboard_model, final, trace) if dashboard_model else None
         if dashboard is not None:
             data = dashboard.model_dump()
@@ -235,21 +226,17 @@ def build_orchestrator(
 
     builder = StateGraph(OrchestratorState, context_schema=Context)
     builder.add_node("route", route)
-    # The analytics agent is added as a REAL subgraph node (not invoked imperatively inside a
-    # function node). This is what lets CopilotKit stream it natively: the subgraph's tool-loop
-    # steps + final answer flow straight into the shared `messages` channel and stream to the
-    # client as they happen. `analytics_post` then enriches the final message (trace + dashboard).
-    # The shared `messages` channel (add_messages) means the subgraph's AnalyticsState merges in
-    # cleanly. (Marketing stays an imperative function node: it's all structured-output with a
-    # hand-built summary, so it has nothing to stream and keeps disable_streaming — see its graph.)
-    builder.add_node("analytics", analytics_graph)
-    builder.add_node("analytics_post", analytics_post)
+    # The two capabilities are compiled subgraphs invoked imperatively inside these function nodes:
+    # each `.invoke(state, config)` passes config straight through (so a HITL interrupt deep in the
+    # marketing subgraph bubbles up and pauses the whole orchestrator). The analytics node returns
+    # ONLY the final answer to top-level state — the subgraph's tool loop is surfaced via the
+    # "Agent's work" trace panel, not as inline messages.
+    builder.add_node("analytics", analytics)
     builder.add_node("marketing", marketing)
     builder.add_node("clarify", clarify)
     builder.add_edge(START, "route")
-    # route dispatches via Command(goto=...); analytics runs the subgraph then post-processes.
-    builder.add_edge("analytics", "analytics_post")
-    builder.add_edge("analytics_post", END)
+    # route dispatches via Command(goto=...); each capability ends the turn.
+    builder.add_edge("analytics", END)
     builder.add_edge("marketing", END)
     builder.add_edge("clarify", END)
 

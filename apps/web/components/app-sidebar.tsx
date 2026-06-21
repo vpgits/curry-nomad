@@ -4,7 +4,7 @@ import { useEffect, type ComponentProps } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useQueryState } from "nuqs";
-import { ChefHat, History, MessageSquare, Sparkles, SquarePen } from "lucide-react";
+import { ChefHat, History, MessageSquare, SquarePen } from "lucide-react";
 import type { Thread } from "@langchain/langgraph-sdk";
 
 import {
@@ -21,14 +21,11 @@ import {
   SidebarRail,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { threadSource } from "@/lib/threads";
 import { useThreads } from "@/providers/Thread";
 
-// The two chat surfaces, both backed by the same Nora graph on Aegra. The sidebar nav links
-// between them; `/` is the canonical chat (it owns the threadId URL state + history).
+// The chat surface, backed by the Nora graph on Aegra. `/` owns the threadId URL state + history.
 const NAV = [
   { href: "/", label: "Nora chat", icon: MessageSquare },
-  { href: "/copilot", label: "CopilotKit", icon: Sparkles },
 ] as const;
 
 // The title is stamped onto thread metadata at creation (StreamProvider.titleThread) — Aegra's
@@ -63,12 +60,10 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
     setThreadId(null);
     setOpenMobile(false);
   };
-  // Open a thread on the surface that created it (CopilotKit → /copilot, everything else → /). If
-  // you're already on that surface just set the URL's threadId; otherwise navigate across to it.
+  // Open a thread: on `/` just set the URL's threadId; otherwise navigate there with it.
   const openThread = (thread: Thread) => {
-    const base = threadSource(thread.metadata) === "copilot" ? "/copilot" : "/";
-    if (pathname === base) setThreadId(thread.thread_id);
-    else router.push(`${base}?threadId=${thread.thread_id}`);
+    if (pathname === "/") setThreadId(thread.thread_id);
+    else router.push(`/?threadId=${thread.thread_id}`);
     setOpenMobile(false);
   };
 
@@ -144,18 +139,14 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
             ) : (
               <SidebarMenu>
                 {ordered.map((t) => {
-                  // Label each thread with the surface that created it; clicking opens it there.
-                  const source = threadSource(t.metadata);
-                  const SourceIcon = source === "copilot" ? Sparkles : MessageSquare;
-                  const base = source === "copilot" ? "/copilot" : "/";
                   return (
                     <SidebarMenuItem key={t.thread_id}>
                       <SidebarMenuButton
                         onClick={() => openThread(t)}
-                        isActive={pathname === base && t.thread_id === threadId}
-                        tooltip={`${threadTitle(t)} · ${source === "copilot" ? "CopilotKit" : "Nora"}`}
+                        isActive={pathname === "/" && t.thread_id === threadId}
+                        tooltip={threadTitle(t)}
                       >
-                        <SourceIcon className="text-muted-foreground" />
+                        <MessageSquare className="text-muted-foreground" />
                         {t.status === "interrupted" && (
                           <span
                             className="size-1.5 shrink-0 rounded-full bg-amber-500"

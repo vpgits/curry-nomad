@@ -73,13 +73,11 @@ def build_analytics_graph(
     """
     settings = settings or get_settings()
     if model is None:
-        # Streaming stays ON: the orchestrator adds this agent as a REAL subgraph node
-        # (`add_node("analytics", analytics_graph)`), so its tool-loop steps + final answer flow
-        # into the shared top-level `messages` channel and stream to the client as real messages.
-        # CopilotKit supports subgraph streaming natively (streamSubgraphs, on by default), so the
-        # AG-UI adapter renders them live; the `/` useStream UI types the answer out token-by-token.
-        # (The router/dashboard/marketing models keep disable_streaming — they're
-        # with_structured_output calls whose result never lands in `messages`. See orchestrator.py.)
+        # The analytics agent is invoked imperatively by the orchestrator's `analytics` node, which
+        # returns only the final answer to top-level state (its tool loop is surfaced via the
+        # "Agent's work" trace panel, not as inline messages). The `/` useStream UI streams `values`,
+        # so streaming here is harmless and we leave it at the default. (The router/dashboard/
+        # marketing models set disable_streaming — see orchestrator.py.)
         model = init_chat_model(settings.model, temperature=0)
     model_with_tools = model.bind_tools(ANALYTICS_TOOLS)
 

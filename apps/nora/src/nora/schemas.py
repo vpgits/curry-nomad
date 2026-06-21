@@ -97,9 +97,9 @@ class DashboardTable(BaseModel):
 class AnalyticsDashboard(BaseModel):
     """A compact dashboard composed from an analytics answer — the generative-UI payload.
 
-    Built post-hoc from the agent's final answer (+ its last query result) and rendered two ways:
-    the useStream UI consumes it via push_ui_message/LoadExternalComponent; the CopilotKit UI via
-    A2UI surfaces. `stats` empty + no `table` means "nothing dashboard-worthy" → skip rendering."""
+    Built post-hoc from the agent's final answer (+ its last query result) and rendered by the
+    useStream UI via push_ui_message/LoadExternalComponent. `stats` empty + no `table` means
+    "nothing dashboard-worthy" → skip rendering."""
 
     title: str
     stats: list[DashboardStat] = Field(default_factory=list)

@@ -71,8 +71,8 @@ export interface ReviewDecision {
   edited_script?: ScriptBeat[];
 }
 
-// The analytics generative-UI dashboard (mirrors AnalyticsDashboard in schemas.py). Rendered two
-// ways from the same data: useStream via LoadExternalComponent, CopilotKit via A2UI.
+// The analytics generative-UI dashboard (mirrors AnalyticsDashboard in schemas.py). Rendered by
+// the useStream UI via LoadExternalComponent.
 export interface DashboardStat {
   label: string;
   value: string;

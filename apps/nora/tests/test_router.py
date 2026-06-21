@@ -48,10 +48,11 @@ def test_data_question_routes_to_analytics():
     assert "Ceylon Cinnamon" in result["messages"][-1].content
 
 
-def test_analytics_subgraph_streams_into_top_level_state_and_post_builds_trace():
-    """Native-subgraph wiring: the analytics agent is a real subgraph node, so its tool-loop
-    messages flow into the orchestrator's `messages` channel (what CopilotKit streams live), and
-    `analytics_post` distils this turn's calls into `tool_trace` on the final answer."""
+def test_analytics_node_returns_only_final_answer_with_trace():
+    """Imperative-subgraph wiring: the analytics agent is invoked inside the `analytics` node, so
+    only its final answer reaches top-level state — the tool loop is hidden behind `.invoke()` and
+    distilled into a `tool_trace` on that answer (the UI's 'Agent's work' panel), not surfaced as
+    inline messages."""
     orch = build_orchestrator(
         router_model=_router(RouteDecision(capability="analytics", reason="data question")),
         analytics_graph=build_analytics_graph(
@@ -67,13 +68,13 @@ def test_analytics_subgraph_streams_into_top_level_state_and_post_builds_trace()
     )
     result = orch.invoke({"messages": [HumanMessage("how many?")]}, _cfg("an-trace"))
 
-    # The subgraph's intermediate tool call + its result now persist in top-level state (not
-    # hidden behind an imperative .invoke()) — this is what lets the adapter stream them.
-    assert any(isinstance(m, ToolMessage) for m in result["messages"])
-    assert any(getattr(m, "tool_calls", None) for m in result["messages"])
-    # analytics_post enriched the final answer with the scoped trace.
+    # The subgraph's intermediate tool call + its ToolMessage stay hidden behind the imperative
+    # .invoke() — top-level state holds only the human turn and the final answer (shown once).
+    assert not any(isinstance(m, ToolMessage) for m in result["messages"])
     final = result["messages"][-1]
     assert final.content == "There is exactly one."
+    assert not getattr(final, "tool_calls", None)
+    # The hidden tool loop is distilled into a trace on the final answer.
     trace = final.additional_kwargs["tool_trace"]
     assert trace[0]["calls"][0]["name"] == "run_sql"
 

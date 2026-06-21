@@ -25,8 +25,7 @@ import operator
 from collections.abc import Sequence
 from typing import Annotated, NotRequired, TypedDict
 
-from copilotkit import CopilotKitState
-from langgraph.graph.message import add_messages
+from langgraph.graph.message import MessagesState, add_messages
 from langgraph.graph.ui import AnyUIMessage, ui_message_reducer
 
 
@@ -43,14 +42,13 @@ def reset_or_extend(current: list, update) -> list:
     return (current or []) + list(update)
 
 
-class OrchestratorState(CopilotKitState):
+class OrchestratorState(MessagesState):
     """Top-level router state.
 
-    Extends `CopilotKitState` so the *same* `nora` graph cleanly serves two frontends: our own
-    useStream client and a CopilotKit (AG-UI) client. `CopilotKitState` (itself a `MessagesState`)
-    contributes `messages` — keeping the `add_messages` reducer — plus the `copilotkit` channel
-    (`actions`: the frontend tools CopilotKit injects per run). `route` is our own addition. Both
-    extra channels are JSON-native dicts, so checkpoints still survive strict msgpack (see below)."""
+    Extends `MessagesState`, which contributes the `messages` channel and its `add_messages`
+    reducer — the chat history the `nora` graph serves to the useStream client. `route` and `ui`
+    are our own additions; both are JSON-native (a dict and a list of dicts), so checkpoints still
+    survive strict msgpack (see the module docstring)."""
 
     route: NotRequired[dict]  # RouteDecision.model_dump()
     # Generative-UI channel: the analytics node push_ui_message()-es a dashboard here, which the
