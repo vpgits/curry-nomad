@@ -1,9 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
-import { ArrowLeft, Boxes } from "lucide-react";
 
+import { AppShell } from "@/components/app-shell";
 import { OrdersSection } from "@/components/operations/OrdersSection";
 import { RoutesSection } from "@/components/operations/RoutesSection";
 import { StockSection } from "@/components/operations/StockSection";
@@ -17,48 +16,38 @@ const SECTIONS = [
 
 type SectionKey = (typeof SECTIONS)[number]["key"];
 
-// The deterministic operations console. No agent, no Aegra — it talks straight to the operations
-// REST API. This is Phase 1: the real system the agent will later be a mere caller of.
+// The deterministic operations console. No agent, no LLM — it talks straight to the operations
+// REST API. This is Phase 1: the real system the agent will later be a mere caller of. It shares
+// the AppShell (collapsible sidebar + header bar) with the chat surface, so cross-page nav lives in
+// the sidebar and the Stock/Orders/Routes tabs are just this page's own body sub-nav.
 export default function InventoryPage() {
   const [section, setSection] = useState<SectionKey>("stock");
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 px-4 py-8">
-      <header className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <Boxes className="size-4" />
-            </div>
-            <div>
-              <h1 className="text-base font-semibold leading-tight">Inventory &amp; Operations</h1>
-              <p className="text-xs text-muted-foreground">Curry Nomad · deterministic, non-agentic</p>
-            </div>
+    <AppShell
+      title="Inventory & Operations"
+      subtitle="Curry Nomad · deterministic, non-agentic"
+    >
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-8">
+          <div className="flex w-fit gap-1 rounded-2xl border bg-muted/30 p-1">
+            {SECTIONS.map((s) => (
+              <Button
+                key={s.key}
+                size="sm"
+                variant={section === s.key ? "secondary" : "ghost"}
+                onClick={() => setSection(s.key)}
+              >
+                {s.label}
+              </Button>
+            ))}
           </div>
-          <Button asChild variant="ghost" size="sm">
-            <Link href="/">
-              <ArrowLeft /> Back to Nora
-            </Link>
-          </Button>
-        </div>
 
-        <div className="flex w-fit gap-1 rounded-2xl border bg-muted/30 p-1">
-          {SECTIONS.map((s) => (
-            <Button
-              key={s.key}
-              size="sm"
-              variant={section === s.key ? "secondary" : "ghost"}
-              onClick={() => setSection(s.key)}
-            >
-              {s.label}
-            </Button>
-          ))}
+          {section === "stock" && <StockSection />}
+          {section === "orders" && <OrdersSection />}
+          {section === "routes" && <RoutesSection />}
         </div>
-      </header>
-
-      {section === "stock" && <StockSection />}
-      {section === "orders" && <OrdersSection />}
-      {section === "routes" && <RoutesSection />}
-    </div>
+      </div>
+    </AppShell>
   );
 }
