@@ -26,7 +26,7 @@ cp .env.example .env                       # then add a provider key (see below)
 uv run python -m nora.data.seed            # build the bundled SQLite DB (deterministic)
 uv run python -m nora.app "What was our best-selling product in Colombo last quarter?"
 uv run python apps/nora/evals/run_evals.py --suite all
-uv run langgraph dev                        # optional: serve the graph + view traces in Studio
+uv run --extra aegra aegra dev               # optional: serve the graph over the Agent Protocol (Aegra; starts Postgres via Docker)
 ```
 
 The bundled database is committed, so the seed step is only needed if you want to rebuild it
@@ -36,21 +36,20 @@ not (see [Testing](#testing)).
 ### Web UI (Next.js)
 
 Beyond the CLI and LangGraph Studio, there's a browser chat UI. It talks to the `nora` graph
-over the **Agent Protocol** served by **`langgraph dev`** (the LangGraph CLI's in-memory server),
+over the **Agent Protocol** served by **Aegra** (a self-hosted Agent Protocol backend),
 using the official `@langchain/langgraph-sdk`:
 
 ```
-Next.js (useStream) ──Agent Protocol──▶ langgraph dev ──▶ nora orchestrator graph
+Next.js (useStream) ──Agent Protocol──▶ Aegra ──▶ nora orchestrator graph
 ```
 
-`langgraph dev` serves the graph (registered in `langgraph.json` via the `make_graph` factory)
-and provides an in-memory checkpointer + semantic store at runtime, so HITL interrupts persist
-and resume within a session, and the store propagates into the analytics/marketing subgraphs.
-The graph code is unchanged — that's the point of the Agent Protocol. (State is in-memory, so it
-resets when the dev server restarts.) The server runs with `--allow-blocking` because Nora's nodes
-invoke their subgraphs synchronously (`.invoke()`) and analytics uses synchronous SQLite.
+Aegra serves the graph (registered in `aegra.json` via the `make_graph` factory) and provides a
+**Postgres-backed** checkpointer + semantic Store at runtime, so HITL interrupts persist and
+resume, the store propagates into the analytics/marketing subgraphs, and state is **durable
+across restarts** (it lives in Postgres). The graph code is unchanged — that's the point of the
+Agent Protocol.
 
-**Option A — the whole app in one command (Docker).** Builds and runs the `langgraph dev`
+**Option A — the whole app in one command (Docker).** Builds and runs the `Aegra + Postgres`
 backend + the Next.js UI, and seeds the Store automatically:
 
 ```bash
@@ -58,7 +57,7 @@ cp .env.example .env          # add OPENAI_API_KEY (the backend won't boot witho
 docker compose up --build     # → open http://localhost:3000
 ```
 
-The browser hits the UI on `:3000`, which streams from the backend on `:2024`; the one-shot
+The browser hits the UI on `:3000`, which streams from Aegra on `:2026`; the one-shot
 `seed` service loads brand voice + metric definitions once the API is healthy. `docker compose
 down` stops it.
 
@@ -66,7 +65,7 @@ down` stops it.
 
 ```bash
 # Backend (repo root) — needs OPENAI_API_KEY:
-uv run langgraph dev --allow-blocking           # serves nora on http://localhost:2024
+uv run --extra aegra aegra dev                   # serves nora on http://localhost:2026 (starts Postgres via Docker)
 uv run python apps/nora/scripts/seed_store.py   # seed brand voice + metric definitions into the store
 
 # Frontend:
@@ -152,10 +151,10 @@ uv run python -m nora.app "What was our best-selling product in Colombo last qua
 
 The CLI flushes Langfuse before exit, so the short-lived process doesn't drop the trace.
 
-**Tracing the full web app** uses LangSmith, which `langgraph dev` integrates natively — no code.
-Set `LANGSMITH_TRACING=true` + `LANGSMITH_API_KEY` in `.env` (see `.env.example`) and every run on
-the dev server shows up in LangSmith, grouped by thread. (The Langfuse path above is wired for the
-CLI demo.)
+**Tracing the full web app** uses **Aegra's OpenTelemetry instrumentation** — set
+`OTEL_TARGETS=LANGFUSE` + `LANGFUSE_BASE_URL` (or point it at any OTLP backend: Langfuse, Phoenix,
+…) and runs group by thread in the Sessions view. (LangSmith via `LANGSMITH_TRACING=true` still
+works at the LangChain level. The Langfuse CallbackHandler path above is wired for the CLI demo.)
 
 **Evaluation (`evals/`).** Two styles, on purpose. Analytics is graded against ground truth
 *derived from the data itself* (run the item's `reference_sql`) plus a trajectory recovery metric.
@@ -165,7 +164,7 @@ grounding, banned claims) plus an LLM-as-judge rubric. The HITL gate is auto-app
 ## Project layout
 
 Monorepo: two sibling apps under `apps/`. The Python side is a single root package — its
-`pyproject.toml` / `uv.lock` and the `langgraph.json` graph config live at the repo root; all
+`pyproject.toml` / `uv.lock` and the `aegra.json` graph config live at the repo root; all
 commands run from there.
 
 ```
@@ -177,7 +176,7 @@ apps/
       schemas.py           Pydantic LLM contracts + Context dataclass
       state.py             TypedDict graph states + reducers
       memory.py            build_store / build_checkpointer / seed_brand_knowledge
-      orchestrator.py      the router graph (entry point) + make_graph for `langgraph dev`
+      orchestrator.py      the router graph (entry point) + make_graph for Aegra
       app.py               demo CLI (streams a turn, prompts on HITL)
       analytics/           tools.py · prompts.py · graph.py   (the AGENT)
       marketing/           prompts.py · nodes.py · graph.py   (the WORKFLOW)
@@ -189,7 +188,7 @@ apps/
   web/                      Next.js chat UI (Agent Protocol client)
 docs/  specs/              case-study plan + build specs (read in order)
 pyproject.toml  uv.lock    single root Python package
-langgraph.json             graph config (beside the pyproject)
+aegra.json                 graph + serving config (Aegra)
 ```
 
 ## Testing

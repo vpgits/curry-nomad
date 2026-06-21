@@ -27,7 +27,7 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(false);
 
-  // The server tags each thread's metadata with the last graph it ran (`graph_id`). Filtering on it
+  // Aegra tags each thread's metadata with the last graph it ran (`graph_id`). Filtering on it
   // scopes the history to this deployment's graph.
   const getThreads = useCallback(async (): Promise<Thread[]> => {
     setThreadsLoading(true);

@@ -1,9 +1,9 @@
 "use client";
 
-// EXPERIMENT (parallel surface): can CopilotKit be reintroduced cleanly now that the backend is
-// `langgraph dev` instead of Aegra? `/` (useStream) is the untouched control; this route is the
-// A/B. The whole CopilotKit ↔ Nora link is: <CopilotKit> → /api/copilotkit (CopilotRuntime +
-// LangGraphAgent) → langgraph dev. Threads are durable on the dev server — no InMemoryAgentRunner.
+// EXPERIMENT (parallel surface): can CopilotKit be reintroduced cleanly against the Aegra backend?
+// `/` (useStream) is the untouched control; this route is the A/B. The whole CopilotKit ↔ Nora link
+// is: <CopilotKit> → /api/copilotkit (CopilotRuntime + LangGraphAgent) → Aegra. Threads are durable
+// on Aegra (Postgres-backed) — no InMemoryAgentRunner.
 import "@copilotkit/react-ui/styles.css";
 
 import { CopilotKit, useLangGraphInterrupt } from "@copilotkit/react-core";

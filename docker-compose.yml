@@ -1,56 +1,91 @@
-# The whole Nora app in containers: `langgraph dev` backend + store seed + operations API + web UI.
+# The whole Nora app in containers: Postgres + Aegra backend + Store seed + operations API + web UI.
 #
 #   cp .env.example .env          # add OPENAI_API_KEY (the backend won't boot without it)
 #   docker compose up --build     # → chat at http://localhost:3000, inventory at /inventory
 #
 # Flow:
-#   browser → web (:3000) → backend (:2024, the `nora` graph via `langgraph dev`) for chat, and
+#   browser → web (:3000) → aegra (:2026, the `nora` graph over the Agent Protocol) → postgres
+#     (durable checkpointer for HITL + the semantic Store) for chat, and
 #   browser → web (/inventory) → ops-api (:8000, the deterministic operations REST API) for
-#   inventory + orders + delivery routing. Both backends keep state in-memory / in an ephemeral
-#   SQLite, so they reset on restart: the `seed` one-shot reloads the Store, and `ops-api` rebuilds
-#   its writable DB on start. The operations system has NO LLM, so ops-api needs no API key.
+#   inventory + orders + delivery routing. The `seed` one-shot loads brand voice + metric
+#   definitions into the Store once Aegra is healthy; ops-api rebuilds its own ephemeral SQLite on
+#   start. The operations system has NO LLM, so ops-api needs no API key.
 #
-# Optional tracing: `langgraph dev` integrates LangSmith natively — set LANGSMITH_TRACING=true
-# and LANGSMITH_API_KEY in .env and runs show up in LangSmith automatically.
+# Optional tracing: Aegra auto-instruments LangChain over OpenTelemetry. Bring up the Langfuse
+# stack (`docker compose -f docker-compose.langfuse.yml up -d`, UI on :3001) and set in .env:
+#   OTEL_TARGETS=LANGFUSE
+#   LANGFUSE_BASE_URL=http://host.docker.internal:3001
+#   LANGFUSE_PUBLIC_KEY=pk-lf-nora-public
+#   LANGFUSE_SECRET_KEY=sk-lf-nora-secret
+# Traces group by thread in the Langfuse Sessions view.
 
 services:
-  backend:
+  postgres:
+    image: pgvector/pgvector:pg18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aegra}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aegra}
+      POSTGRES_DB: ${POSTGRES_DB:-aegra}
+    volumes:
+      # Postgres 18 places PGDATA in a versioned subdir; mount the parent (not /data).
+      - nora_postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aegra}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  aegra:
     build:
       context: .
       dockerfile: Dockerfile
-    image: curry-nomad-backend:latest
+    image: curry-nomad-aegra:latest
     restart: unless-stopped
     env_file:
       - path: .env
         required: false
     environment:
       HOST: 0.0.0.0
-      PORT: "2024"
+      PORT: "2026"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-aegra}:${POSTGRES_PASSWORD:-aegra}@postgres:5432/${POSTGRES_DB:-aegra}
+      # Single-instance demo: in-process asyncio runs (no Redis service needed).
+      REDIS_BROKER_ENABLED: "false"
+      # Keyless locally (no auth handler).
+      AUTH_TYPE: noop
+      # Tracing is opt-in (empty = off). See the Langfuse note at the top of this file.
+      OTEL_TARGETS: ${OTEL_TARGETS:-}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-http://host.docker.internal:3001}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
-      - "2024:2024"
+      - "2026:2026"
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:2024/ok || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:2026/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 45s
 
   # One-shot: seed brand voice + metric definitions into the running Store, then exit.
   seed:
-    image: curry-nomad-backend:latest
+    image: curry-nomad-aegra:latest
     restart: "no"
     command: ["python", "apps/nora/scripts/seed_store.py"]
     environment:
-      NORA_API_URL: http://backend:2024
+      NORA_API_URL: http://aegra:2026
     depends_on:
-      backend:
+      aegra:
         condition: service_healthy
 
   # The deterministic operations system (inventory + orders + delivery routing). Reuses the
-  # backend image (built with the `operations` extra); seeds its writable, ephemeral SQLite on
+  # aegra image (built with the `operations` extra); seeds its writable, ephemeral SQLite on
   # start, then serves the REST API the web /inventory page calls. No LLM → no API key needed.
   ops-api:
-    image: curry-nomad-backend:latest
+    image: curry-nomad-aegra:latest
     restart: unless-stopped
     command:
       - sh
@@ -65,8 +100,8 @@ services:
       retries: 5
       start_period: 15s
     depends_on:
-      # Only to ensure the shared backend image is built first; ops-api is otherwise independent.
-      backend:
+      # Only to ensure the shared image is built first; ops-api is otherwise independent.
+      aegra:
         condition: service_started
 
   web:
@@ -74,7 +109,7 @@ services:
       context: ./apps/web
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:2024}
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:2026}
         NEXT_PUBLIC_ASSISTANT_ID: ${NEXT_PUBLIC_ASSISTANT_ID:-nora}
         NEXT_PUBLIC_OPS_API_URL: ${NEXT_PUBLIC_OPS_API_URL:-http://localhost:8000}
     image: curry-nomad-web:latest
@@ -82,7 +117,10 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      backend:
+      aegra:
         condition: service_started
       ops-api:
         condition: service_started
+
+volumes:
+  nora_postgres_data:

@@ -12,7 +12,7 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
   title: "Curry Nomad — Nora",
-  description: "Agent + workflow assistant for a Sri Lankan spice business (LangGraph)",
+  description: "Agent + workflow assistant for a Sri Lankan spice business (LangGraph + Aegra)",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -21,7 +21,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-screen bg-background text-foreground antialiased">
         <NuqsAdapter>
           <TooltipProvider delayDuration={0}>
-            {/* ThreadProvider (thread history) + a Suspense boundary for the sidebar's
+            {/* ThreadProvider (Aegra thread history) + a Suspense boundary for the sidebar's
                 nuqs threadId state are shared by every page so the AppShell sidebar works app-wide. */}
             <ThreadProvider>
               <Suspense fallback={null}>{children}</Suspense>

@@ -26,7 +26,7 @@ Monorepo with two sibling apps under `apps/`:
   `evals/`, `scripts/`).
 - `apps/web/` — the Next.js frontend (Agent Protocol client).
 
-It's a **single root Python package**: `pyproject.toml`, `uv.lock`, and the `langgraph.json`
+It's a **single root Python package**: `pyproject.toml`, `uv.lock`, and the `aegra.json`
 graph config live at the **repo root** — run every command from there. Unless a
 path is given from the repo root, file references below are relative to the `nora` package
 (`apps/nora/src/nora/`).
@@ -40,7 +40,7 @@ uv sync                                          # install deps
 uv run python -m nora.data.seed                  # rebuild the bundled SQLite DB (deterministic; only if changing data)
 uv run python -m nora.app "What was our best-selling product in Colombo last quarter?"   # run one turn (needs provider key)
 uv run python apps/nora/evals/run_evals.py --suite all   # eval suites: analytics | marketing | all (needs provider key)
-uv run langgraph dev                             # serve the `nora` graph + LangSmith Studio
+uv run --extra aegra aegra dev                    # serve the `nora` graph over the Agent Protocol (Aegra; starts Postgres via Docker)
 
 uv run pytest                                    # full offline test suite (NO API key needed)
 uv run pytest apps/nora/tests/test_analytics_graph.py   # one file
@@ -68,12 +68,13 @@ model with `thinking=` + `temperature=1`; the frontend pulls it via `getReasonin
 
 ### Web stack (optional)
 ```bash
-uv run langgraph dev --allow-blocking            # serve `nora` over the Agent Protocol on :2024 (in-memory; needs OPENAI_API_KEY)
+uv run --extra aegra aegra dev                    # serve `nora` over the Agent Protocol on :2026 (Postgres via Docker; needs OPENAI_API_KEY)
 uv run python apps/nora/scripts/seed_store.py    # seed brand voice + metric definitions into the running Store
 cd apps/web && npm install && npm run dev        # Next.js chat UI on :3000
 ```
-`--allow-blocking` is required: Nora's nodes invoke their subgraphs synchronously (`.invoke()`) and
-analytics uses synchronous SQLite, so the async dev server would otherwise raise `BlockingError`.
+Unlike `langgraph dev`, Aegra does not enforce a blocking-call check, so Nora's synchronous
+`.invoke()` subgraph calls (and synchronous SQLite) need no special flag. Aegra is Postgres-backed,
+so threads/Store persist across restarts.
 
 ## Architecture — the load-bearing ideas
 
@@ -89,9 +90,9 @@ interrupt/resume is the canonical demo — don't break the `config` plumbing.
 - `build_orchestrator(...)` / `build_*_graph(...)`: explicit constructors with **injectable**
   `model`, `checkpointer`, `store` (and `spice_db`, `auto_approve`). This is how tests and the CLI
   wire things.
-- `make_graph()` (referenced by `langgraph.json`): compiles **without** a checkpointer/store
-  because the *platform* (`langgraph dev`) injects persistence + the semantic Store at runtime.
-  The CLI (`app.py`) is the self-contained path and builds its own in-memory ones.
+- `make_graph()` (referenced by `aegra.json`): compiles **without** a checkpointer/store
+  because the *platform* (Aegra) injects persistence (Postgres checkpointer) + the semantic Store
+  at runtime. The CLI (`app.py`) is the self-contained path and builds its own in-memory ones.
 
 **Self-correction loop (`analytics/`).** `run_sql` lets `SqlError` **propagate**;
 `ToolNode(handle_tool_errors=handle_sql_error)` turns it into a ToolMessage the model reads and
@@ -116,7 +117,7 @@ semantic Store (long-term), both compiled in and actually *read in nodes via `ru
 not built-and-ignored. Two namespaces: `BRAND` (marketing reads brand voice) and `DEFINITIONS`
 (analytics reads metric definitions). Seed data lives in `seed_items()`, loaded two ways: in-process
 `seed_brand_knowledge(store)` for the CLI, and `apps/nora/scripts/seed_store.py` over the Store
-API for the platform path (`langgraph dev`).
+API for the platform path (Aegra).
 
 **Config (`config.py`).** `Settings` (pydantic-settings, `NORA_` env prefix) via the cached
 `get_settings()` singleton. **Secrets are intentionally NOT Settings fields** — provider keys and
@@ -138,16 +139,17 @@ optional, env-gated tracers layer on top: **LangSmith** (auto-on via `LANGSMITH_
 never added to `Settings`. The CLI attaches the Langfuse handler to its run `config` (one attach
 point traces the whole orchestrator via the `config` pass-through) and flushes before exit; self-host
 the stack with `docker-compose.langfuse.yml` (UI on :3001). The **full web app** traces via
-LangSmith instead — `langgraph dev` integrates it natively, so `LANGSMITH_TRACING=true` +
-`LANGSMITH_API_KEY` in the env is all the web path needs (no code), grouping runs by thread.
+Aegra's OpenTelemetry instrumentation — set `OTEL_TARGETS=LANGFUSE` + `LANGFUSE_BASE_URL` (or any
+OTLP backend) and runs group by thread in the Sessions view; `LANGSMITH_TRACING=true` still works
+at the LangChain level.
 
-**Running the whole app.** The root `docker-compose.yml` builds + runs the stack (the `langgraph
-dev` backend + one-shot Store `seed` + the `ops-api` operations service + Next.js `web`; no
-Postgres): `docker compose up --build` → chat at :3000, inventory at :3000/inventory. The `ops-api`
+**Running the whole app.** The root `docker-compose.yml` builds + runs the stack (Postgres + the
+`aegra` (Aegra `serve`) backend + one-shot Store `seed` + the `ops-api` operations service + Next.js
+`web`): `docker compose up --build` → chat at :3000, inventory at :3000/inventory. The `ops-api`
 service reuses the backend image (built with `--extra operations`), seeds its writable ephemeral
 SQLite on start, and serves the operations REST API on :8000 — no LLM, so no API key. `Dockerfile`
-(backend, `langgraph dev`) and `apps/web/Dockerfile` (Next.js) back it; the web image pins pnpm via
-`packageManager`. The in-repo alternative is `langgraph dev` + `uvicorn nora.operations.api:app`
+(backend, `aegra serve`) and `apps/web/Dockerfile` (Next.js) back it; the web image pins pnpm via
+`packageManager`. The in-repo alternative is `aegra dev` + `uvicorn nora.operations.api:app`
 + `pnpm dev`.
 
 ## Testing approach

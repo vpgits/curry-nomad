@@ -53,7 +53,7 @@ def build_store(settings: Settings) -> InMemoryStore:
 # (now, or via a future change), it still round-trips as the real model — even under
 # `LANGGRAPH_STRICT_MSGPACK=true`, where unregistered types silently degrade to bare dicts.
 # NOTE: this only covers the checkpointer *we* construct. On the platform path
-# (`langgraph dev`) the server builds its own serializer, so the JSON-native-state design in
+# (Aegra) the server builds its own serializer, so the JSON-native-state design in
 # nora/state.py — not this list — is what keeps persistence portable there.
 _NORA_MSGPACK_SCHEMAS = [
     RouteDecision, ConceptIdea, ScriptBeat, Shot, ShotPrompt, Critique, VideoBrief,

@@ -1,13 +1,13 @@
 """Seed the platform's semantic Store with Curry Nomad's brand voice + metric definitions.
 
-Run this once after the server is up, so the analytics agent can retrieve metric
-definitions and the marketing workflow can retrieve brand voice (memory shaping behavior):
+Run this once after Aegra is up, so the analytics agent can retrieve metric definitions and the
+marketing workflow can retrieve brand voice (memory shaping behavior):
 
-    uv run langgraph dev                            # in one terminal (serves the graph on :2024)
+    uv run --extra aegra aegra dev                   # in one terminal (serves the graph on :2026)
     uv run python apps/nora/scripts/seed_store.py   # in another (writes the seed over the Store API)
 
-Targets http://localhost:2024 by default (`langgraph dev`). Override with --url or NORA_API_URL —
-the same script works against any Agent-Protocol server.
+Targets http://localhost:2026 by default (Aegra). Override with --url or NORA_API_URL — the same
+script works against any Agent-Protocol server.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ async def seed(url: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Seed the platform's semantic Store.")
-    parser.add_argument("--url", default=os.getenv("NORA_API_URL", "http://localhost:2024"))
+    parser.add_argument("--url", default=os.getenv("NORA_API_URL", "http://localhost:2026"))
     asyncio.run(seed(parser.parse_args().url))
 
 

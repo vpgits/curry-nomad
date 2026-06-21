@@ -7,9 +7,9 @@ import { createClient } from "@/providers/client";
 export const sleep = (ms = 1000) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Stamp a title (from the first user message) onto a thread's metadata once, after its first run.
-// The history sidebar reads it back to label each thread. The server's /threads/search returns no state
+// The history sidebar reads it back to label each thread. Aegra's /threads/search returns no state
 // values, so the title can't be derived at list time — we read it from thread state here. graph_id
-// is re-sent so the search filter survives whether the server merges or replaces metadata on update.
+// is re-sent so the search filter survives whether Aegra merges or replaces metadata on update.
 export async function tagThread(id: string): Promise<void> {
   const client = createClient(API_URL);
   const state = await client.threads.getState(id);

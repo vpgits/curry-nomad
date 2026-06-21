@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/sidebar";
 import { useThreads } from "@/providers/Thread";
 
-// The chat surface, backed by the Nora graph on the LangGraph server. `/` owns the threadId URL
+// The chat surface, backed by the Nora graph on Aegra. `/` owns the threadId URL
 // state + history. `/inventory` is the standalone, non-agentic operations console.
 const NAV = [
   { href: "/", label: "Nora chat", icon: MessageSquare },
@@ -31,7 +31,7 @@ const NAV = [
 ] as const;
 
 // The title is stamped onto thread metadata at creation (StreamProvider.titleThread) — the
-// server's search doesn't return state values, so we can't read messages here.
+// Aegra's search doesn't return state values, so we can't read messages here.
 function threadTitle(thread: Thread): string {
   const meta = thread.metadata as { title?: unknown } | undefined;
   const title = typeof meta?.title === "string" ? meta.title.trim() : "";

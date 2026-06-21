@@ -2,13 +2,13 @@
 
 A small **Next.js (App Router + TypeScript)** chat frontend for Nora, styled with
 **shadcn/ui** (Tailwind v4). It talks to the `nora`
-graph through **`langgraph dev`** (the LangGraph CLI's Agent Protocol server) using the official
+graph through **Aegra** (a self-hosted Agent Protocol server) using the official
 [`@langchain/langgraph-sdk`](https://www.npmjs.com/package/@langchain/langgraph-sdk) `useStream`
 hook — so streaming, threads, and human-in-the-loop interrupts are handled by the SDK, not a
 hand-rolled API client.
 
 ```
-Next.js (useStream) ──Agent Protocol──▶ langgraph dev ──▶ nora orchestrator graph
+Next.js (useStream) ──Agent Protocol──▶ Aegra ──▶ nora orchestrator graph
 ```
 
 ## What it shows
@@ -29,7 +29,7 @@ First start the backend (from the repo root) and seed memory:
 
 ```bash
 cp .env.example .env          # add OPENAI_API_KEY
-uv run langgraph dev --allow-blocking   # serves the nora graph on http://localhost:2024 (in-memory; no Postgres)
+uv run --extra aegra aegra dev # serves the nora graph on http://localhost:2026 (Postgres via Docker)
 uv run python apps/nora/scripts/seed_store.py   # seed brand voice + metric definitions into the store
 ```
 
@@ -37,10 +37,10 @@ Then the frontend:
 
 ```bash
 cd apps/web
-cp .env.local.example .env.local   # NEXT_PUBLIC_API_URL=http://localhost:2024
+cp .env.local.example .env.local   # NEXT_PUBLIC_API_URL=http://localhost:2026
 pnpm install
 pnpm dev                           # http://localhost:3000
 ```
 
-`langgraph.json` allows CORS from `http://localhost:3000`. Requires an OpenAI key (chat models +
+`aegra.json` allows CORS from `http://localhost:3000`. Requires an OpenAI key (chat models +
 the semantic store embeddings).

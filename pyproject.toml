@@ -36,6 +36,11 @@ operations = [
     "uvicorn>=0.30",
     "httpx>=0.27",  # Starlette's TestClient (used by the offline API tests) needs it
 ]
+# Aegra serving layer: the self-hosted Agent Protocol backend that serves the `nora` graph
+# (replaces `langgraph dev`). Enable with `uv sync --extra aegra`; run `aegra dev` / `aegra serve`.
+aegra = [
+    "aegra-cli>=0.9.22",
+]
 
 [project.scripts]
 # Build the writable operations DB (deterministic; safe to re-run). Needs no provider key.
@@ -44,11 +49,10 @@ nora-ops-seed = "nora.operations.seed:main"
 nora-ops-api = "nora.operations.api:run"
 
 [dependency-groups]
-# Installed by `uv sync` by default. langgraph-cli powers `langgraph dev` (M4).
+# Installed by `uv sync` by default.
 dev = [
     "pytest>=8.2",
     "ruff>=0.6",
-    "langgraph-cli[inmem]>=0.2",
 ]
 
 [build-system]

@@ -1,6 +1,6 @@
 // CopilotKit self-hosted runtime — the ONLY backend layer reintroduced for the /copilot
 // experiment. It is a thin proxy: every request is forwarded to the `nora` graph already served
-// by `langgraph dev` over the Agent Protocol on :2024. Crucially this is the *durable* path —
+// by Aegra over the Agent Protocol on :2026. Crucially this is the *durable* path —
 // `LangGraphAgent` reads/writes threads through the Platform Threads API (the same store
 // `useStream` uses on `/`), so there is NO in-process thread store like the old
 // `InMemoryAgentRunner` that made thread reloads come back empty. See the experiment notes.
@@ -15,16 +15,16 @@ import {
 import { LangGraphAgent } from "@copilotkit/runtime/langgraph";
 import { NextRequest } from "next/server";
 
-const DEPLOYMENT_URL = process.env.LANGGRAPH_DEPLOYMENT_URL ?? "http://localhost:2024";
+const DEPLOYMENT_URL = process.env.LANGGRAPH_DEPLOYMENT_URL ?? "http://localhost:2026";
 
 const runtime = new CopilotRuntime({
   agents: {
     // The key is the agent id the frontend locks onto (<CopilotKit agent="nora">); graphId is the
-    // graph registered in langgraph.json. They match by convention here.
+    // graph registered in aegra.json. They match by convention here.
     nora: new LangGraphAgent({
       deploymentUrl: DEPLOYMENT_URL,
       graphId: "nora",
-      // Optional; the local dev server is keyless. Forwarded to LangSmith when present.
+      // Optional; Aegra is keyless locally. Forwarded to LangSmith when present.
       langsmithApiKey: process.env.LANGSMITH_API_KEY ?? "",
     }),
   },
