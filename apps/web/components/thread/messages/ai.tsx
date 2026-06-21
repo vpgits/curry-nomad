@@ -176,11 +176,10 @@ function ToolStepGroup({
           continuation ? "-top-6 bottom-2" : "top-1.5 bottom-2",
         )}
       />
-      {/* fork node sitting on the rail, + the step label */}
-      <div className="relative mb-1.5 flex items-center text-[11px] font-medium text-muted-foreground">
-        <span className="absolute left-2 top-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-border bg-background" />
-        {label}
-      </div>
+      {/* fork node sits ON the rail (absolute to the container, centred on the rail's x); the label
+          flows to its right at pl-5, so the dot never lands on the text. */}
+      <span className="absolute top-2 left-2 size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-muted-foreground/60" />
+      <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">{label}</div>
       {/* the calls — branches off the fork (each connected to the rail by a short tick) */}
       <div className="space-y-1.5">
         {calls.map((c, i) => (
