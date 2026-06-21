@@ -62,4 +62,8 @@ EXPOSE 2024
 # environment (chat models + the semantic Store embeddings). --no-browser keeps it headless.
 # --allow-blocking: Nora's nodes call subgraphs with synchronous .invoke() and analytics uses
 # synchronous SQLite; the async dev server would otherwise raise BlockingError on the event loop.
-CMD ["langgraph", "dev", "--host", "0.0.0.0", "--port", "2024", "--no-browser", "--allow-blocking"]
+# --no-reload: hot-reload is for live code editing, which never happens in a container — and worse,
+# the dev server writes its in-memory state to `.langgraph_api/*.pckl` every ~10s, which watchfiles
+# sees as a change and reloads on, tearing down live SSE streams mid-run (the client then sees
+# "Failed to fetch" and no token streaming). Rebuild the image to change code instead.
+CMD ["langgraph", "dev", "--host", "0.0.0.0", "--port", "2024", "--no-browser", "--allow-blocking", "--no-reload"]
