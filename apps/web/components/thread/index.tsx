@@ -1,18 +1,19 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, ChefHat, Menu, Square } from "lucide-react";
+import { ArrowDown, ArrowUp, ChefHat, Square } from "lucide-react";
 import type { Message } from "@langchain/langgraph-sdk";
 
+import { AppSidebar } from "@/components/app-sidebar";
 import { ApprovalCard } from "@/components/ApprovalCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/utils";
+import { Separator } from "@/components/ui/separator";
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import type { ReviewDecision, ReviewInterrupt } from "@/lib/types";
 import { useStreamContext } from "@/providers/Stream";
 import { AssistantMessage, NoraAvatar } from "./messages/ai";
 import { HumanMessage } from "./messages/human";
-import { ThreadHistory } from "./history";
 
 const SUGGESTIONS = [
   "What was our best-selling product in Colombo last quarter?",
@@ -23,7 +24,6 @@ const SUGGESTIONS = [
 export function Thread() {
   const stream = useStreamContext();
   const [input, setInput] = useState("");
-  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const messages = stream.messages.filter((m) => !m.id?.startsWith("do-not-render-"));
   const interrupt = stream.interrupt?.value as ReviewInterrupt | undefined;
@@ -58,35 +58,13 @@ export function Thread() {
   };
 
   return (
-    <div className="flex h-dvh">
-      <aside className="hidden w-72 shrink-0 border-r bg-sidebar text-sidebar-foreground lg:flex lg:flex-col">
-        <ThreadHistory />
-      </aside>
-
-      {sidebarOpen && (
-        <div className="fixed inset-0 z-40 lg:hidden">
-          <div className="absolute inset-0 bg-black/50" onClick={() => setSidebarOpen(false)} />
-          <aside className="absolute top-0 left-0 h-full w-72 border-r bg-sidebar text-sidebar-foreground">
-            <ThreadHistory onNavigate={() => setSidebarOpen(false)} />
-          </aside>
-        </div>
-      )}
-
-      <div className="flex min-w-0 flex-1 flex-col">
+    <SidebarProvider className="h-dvh overflow-hidden">
+      <AppSidebar />
+      <SidebarInset className="min-w-0">
         <header className="shrink-0 border-b bg-background/80 backdrop-blur">
-          <div className="mx-auto flex max-w-3xl items-center gap-3 px-4 py-3">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-8 lg:hidden"
-              onClick={() => setSidebarOpen(true)}
-              aria-label="Open history"
-            >
-              <Menu className="size-5" />
-            </Button>
-            <div className="flex size-9 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-              <ChefHat className="size-5" />
-            </div>
+          <div className="flex items-center gap-2 px-4 py-3">
+            <SidebarTrigger className="-ml-1" />
+            <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-5" />
             <div className="min-w-0">
               <h1 className="text-sm leading-tight font-semibold">
                 Nora · <span className="text-muted-foreground">Curry Nomad</span>
@@ -146,8 +124,8 @@ export function Thread() {
             )}
           </form>
         </footer>
-      </div>
-    </div>
+      </SidebarInset>
+    </SidebarProvider>
   );
 }
 
@@ -196,7 +174,7 @@ function MessageList({
   const interruptKey = interrupt ? JSON.stringify(interrupt.script_beats) : undefined;
 
   return (
-    <main ref={scrollRef} onScroll={onScroll} className="relative flex-1 overflow-y-auto">
+    <div ref={scrollRef} onScroll={onScroll} className="relative min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto max-w-3xl px-4 py-6">
         {isEmpty ? (
           <EmptyState onPick={onPick} />
@@ -250,7 +228,7 @@ function MessageList({
           <ArrowDown className="size-4" />
         </Button>
       )}
-    </main>
+    </div>
   );
 }
 
