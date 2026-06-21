@@ -4,8 +4,8 @@
 # Usually built via the repo-root docker-compose.yml (the `web` service).
 #
 # NEXT_PUBLIC_* values are inlined into the client bundle at BUILD time, so the
-# Aegra URL is a build arg — and it must be the address the *browser* uses
-# (http://localhost:2026, the host-published port), not a compose-internal name.
+# backend URL is a build arg — and it must be the address the *browser* uses
+# (http://localhost:2024, the host-published port), not a compose-internal name.
 
 FROM node:22-alpine AS base
 RUN corepack enable
@@ -24,9 +24,9 @@ RUN pnpm install --frozen-lockfile
 FROM base AS build
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-ARG NEXT_PUBLIC_AEGRA_URL=http://localhost:2026
+ARG NEXT_PUBLIC_API_URL=http://localhost:2024
 ARG NEXT_PUBLIC_ASSISTANT_ID=nora
-ENV NEXT_PUBLIC_AEGRA_URL=$NEXT_PUBLIC_AEGRA_URL \
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
     NEXT_PUBLIC_ASSISTANT_ID=$NEXT_PUBLIC_ASSISTANT_ID \
     NEXT_TELEMETRY_DISABLED=1
 RUN pnpm build

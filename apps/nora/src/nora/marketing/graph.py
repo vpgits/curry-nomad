@@ -60,7 +60,7 @@ def build_marketing_graph(
         # disable_streaming: every marketing node is a with_structured_output call (plus the plain
         # shot-prompt text), all consumed into typed state — the user-facing output is the
         # orchestrator's hand-built summary message, not an LLM token stream. With streaming on,
-        # Aegra's `messages` stream would surface those internal calls' deltas as phantom partial
+        # the LangGraph server's `messages` stream would surface those internal calls' deltas as phantom partial
         # messages in the useStream UI, so the marketing path stays off the token stream too. No
         # UX cost — nothing here is streamed to the user. See orchestrator.py for the full rationale.
         model = init_chat_model(settings.model, temperature=0.7, disable_streaming=True)

@@ -15,7 +15,7 @@ import { MarkdownText } from "../markdown";
 import { BranchSwitcher } from "./shared";
 
 // Client-side component map for push_ui_message UI messages — LoadExternalComponent renders these
-// directly (no remote bundle fetch, which Aegra can't serve anyway).
+// directly (no remote bundle fetch, which the local dev server can't serve anyway).
 const UI_COMPONENTS = { analytics_dashboard: AnalyticsDashboard };
 
 export function NoraAvatar() {

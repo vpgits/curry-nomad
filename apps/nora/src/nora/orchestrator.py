@@ -109,8 +109,8 @@ def build_orchestrator(
     if router_model is None:
         # disable_streaming: the router classifies via with_structured_output — a forced tool call
         # whose parsed result is consumed into `route`, never appended to `messages`. With streaming
-        # on, Aegra's `messages` stream still emits that internal call's token/tool-call deltas (it
-        # captures every LLM call via callbacks), so the useStream UI would briefly render a phantom
+        # on, the LangGraph server's `messages` stream still emits that internal call's token/tool-call
+        # deltas (it captures every LLM call via callbacks), so the useStream UI would briefly render a phantom
         # partial message for a result that never lands. Disabling streaming keeps this internal call
         # off the token stream; it is never user-facing text, so nothing is lost. (The router,
         # dashboard, and marketing models all disable streaming for this reason; the analytics agent
@@ -244,11 +244,11 @@ def build_orchestrator(
 
 
 def make_graph():
-    """Factory for a platform server (Aegra via aegra.json, or `langgraph dev`).
+    """Factory for a platform server (`langgraph dev` via langgraph.json).
 
-    The platform provides persistence — the Postgres checkpointer (so HITL interrupts persist
-    and resume) and the semantic Store (configured under `store.index` in aegra.json). So we
-    compile WITHOUT our own: the platform injects them at runtime, and the store propagates into
+    The platform provides persistence — the checkpointer (so HITL interrupts persist and resume)
+    and the semantic Store (configured under `store.index` in langgraph.json). So we compile
+    WITHOUT our own: the platform injects them at runtime, and the store propagates into
     the analytics/marketing subgraphs. Seed the Store's brand voice + metric definitions once
     after the server is up with `apps/nora/scripts/seed_store.py`.
 

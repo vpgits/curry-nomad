@@ -11,7 +11,7 @@ clean choice for `StateGraph` partial-update semantics.
 **State holds JSON-native data (dicts), not Pydantic models.** The structured-output schemas
 (`RouteDecision`, `ConceptIdea`, …) are used *transiently inside nodes* for validation and typed
 logic, then `.model_dump()`-ed before being written to state. This keeps persistence portable:
-a checkpointer serializes state at every super-step, and the platform (Aegra / `langgraph dev`)
+a checkpointer serializes state at every super-step, and the platform (`langgraph dev`)
 injects its own checkpointer whose msgpack serializer only deserializes *allow-listed* modules.
 Custom Pydantic types stored there round-trip as bare dicts under `LANGGRAPH_STRICT_MSGPACK=true`
 (and a future LangGraph default), silently breaking attribute access on resume. Dicts dodge that

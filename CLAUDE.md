@@ -24,10 +24,10 @@ editing: keep patterns explicit and the explanatory docstrings/comments intact.
 Monorepo with two sibling apps under `apps/`:
 - `apps/nora/` — the Python backend (package `nora` under `apps/nora/src/nora/`, plus `tests/`,
   `evals/`, `scripts/`).
-- `apps/web/` — the Next.js frontend (Aegra / Agent Protocol client).
+- `apps/web/` — the Next.js frontend (Agent Protocol client).
 
-It's a **single root Python package**: `pyproject.toml`, `uv.lock`, and the `langgraph.json` /
-`aegra.json` graph configs live at the **repo root** — run every command from there. Unless a
+It's a **single root Python package**: `pyproject.toml`, `uv.lock`, and the `langgraph.json`
+graph config live at the **repo root** — run every command from there. Unless a
 path is given from the repo root, file references below are relative to the `nora` package
 (`apps/nora/src/nora/`).
 
@@ -61,10 +61,12 @@ the semantic Store still needs `OPENAI_API_KEY` even on a non-OpenAI chat model.
 
 ### Web stack (optional)
 ```bash
-uv sync --extra aegra && uv run aegra dev        # serve `nora` over the Agent Protocol on :2026 (needs Docker + OPENAI_API_KEY)
+uv run langgraph dev --allow-blocking            # serve `nora` over the Agent Protocol on :2024 (in-memory; needs OPENAI_API_KEY)
 uv run python apps/nora/scripts/seed_store.py    # seed brand voice + metric definitions into the running Store
 cd apps/web && npm install && npm run dev        # Next.js chat UI on :3000
 ```
+`--allow-blocking` is required: Nora's nodes invoke their subgraphs synchronously (`.invoke()`) and
+analytics uses synchronous SQLite, so the async dev server would otherwise raise `BlockingError`.
 
 ## Architecture — the load-bearing ideas
 
@@ -80,9 +82,9 @@ interrupt/resume is the canonical demo — don't break the `config` plumbing.
 - `build_orchestrator(...)` / `build_*_graph(...)`: explicit constructors with **injectable**
   `model`, `checkpointer`, `store` (and `spice_db`, `auto_approve`). This is how tests and the CLI
   wire things.
-- `make_graph()` (referenced by `langgraph.json` and `aegra.json`): compiles **without** a
-  checkpointer/store because the *platform* injects Postgres persistence + the semantic Store at
-  runtime. The CLI (`app.py`) is the self-contained path and builds its own in-memory ones.
+- `make_graph()` (referenced by `langgraph.json`): compiles **without** a checkpointer/store
+  because the *platform* (`langgraph dev`) injects persistence + the semantic Store at runtime.
+  The CLI (`app.py`) is the self-contained path and builds its own in-memory ones.
 
 **Self-correction loop (`analytics/`).** `run_sql` lets `SqlError` **propagate**;
 `ToolNode(handle_tool_errors=handle_sql_error)` turns it into a ToolMessage the model reads and
@@ -107,7 +109,7 @@ semantic Store (long-term), both compiled in and actually *read in nodes via `ru
 not built-and-ignored. Two namespaces: `BRAND` (marketing reads brand voice) and `DEFINITIONS`
 (analytics reads metric definitions). Seed data lives in `seed_items()`, loaded two ways: in-process
 `seed_brand_knowledge(store)` for the CLI, and `apps/nora/scripts/seed_store.py` over the Store
-API for the Aegra/platform path.
+API for the platform path (`langgraph dev`).
 
 **Config (`config.py`).** `Settings` (pydantic-settings, `NORA_` env prefix) via the cached
 `get_settings()` singleton. **Secrets are intentionally NOT Settings fields** — provider keys and
@@ -128,15 +130,15 @@ optional, env-gated tracers layer on top: **LangSmith** (auto-on via `LANGSMITH_
 `uv sync --extra langfuse`). Like provider keys, `LANGFUSE_*` is read straight from the environment,
 never added to `Settings`. The CLI attaches the Langfuse handler to its run `config` (one attach
 point traces the whole orchestrator via the `config` pass-through) and flushes before exit; self-host
-the stack with `docker-compose.langfuse.yml` (UI on :3001). The **full web app** (Aegra) needs no
-code to trace: Aegra ships native OpenTelemetry observability and auto-instruments LangChain — set
-`OTEL_TARGETS=LANGFUSE` + `LANGFUSE_BASE_URL` (+ keys) in the env and it fans out to Langfuse,
-grouping traces by thread in the Sessions view.
+the stack with `docker-compose.langfuse.yml` (UI on :3001). The **full web app** traces via
+LangSmith instead — `langgraph dev` integrates it natively, so `LANGSMITH_TRACING=true` +
+`LANGSMITH_API_KEY` in the env is all the web path needs (no code), grouping runs by thread.
 
-**Running the whole app.** The root `docker-compose.yml` builds + runs the full stack (Postgres +
-Aegra backend + one-shot Store `seed` + Next.js `web`): `docker compose up --build` → the UI on
-:3000. `Dockerfile` (backend, `aegra serve`) and `apps/web/Dockerfile` (Next.js) back it; the web
-image pins pnpm via `packageManager`. The in-repo alternative is `aegra dev` + `pnpm dev`.
+**Running the whole app.** The root `docker-compose.yml` builds + runs the slimmed stack (the
+`langgraph dev` backend + one-shot Store `seed` + Next.js `web`; no Postgres): `docker compose up
+--build` → the UI on :3000. `Dockerfile` (backend, `langgraph dev`) and `apps/web/Dockerfile`
+(Next.js) back it; the web image pins pnpm via `packageManager`. The in-repo alternative is
+`langgraph dev` + `pnpm dev`.
 
 ## Testing approach
 
