@@ -22,10 +22,12 @@ entirely; nodes rehydrate (`Model(**d)`) where they need the typed object — se
 from __future__ import annotations
 
 import operator
+from collections.abc import Sequence
 from typing import Annotated, NotRequired, TypedDict
 
 from copilotkit import CopilotKitState
 from langgraph.graph.message import add_messages
+from langgraph.graph.ui import AnyUIMessage, ui_message_reducer
 
 
 def reset_or_extend(current: list, update) -> list:
@@ -51,6 +53,9 @@ class OrchestratorState(CopilotKitState):
     extra channels are JSON-native dicts, so checkpoints still survive strict msgpack (see below)."""
 
     route: NotRequired[dict]  # RouteDecision.model_dump()
+    # Generative-UI channel: the analytics node push_ui_message()-es a dashboard here, which the
+    # useStream UI renders via LoadExternalComponent. (UIMessage is a plain dict — msgpack-safe.)
+    ui: Annotated[Sequence[AnyUIMessage], ui_message_reducer]
 
 
 class AnalyticsState(TypedDict):

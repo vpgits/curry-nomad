@@ -76,6 +76,36 @@ class VideoBrief(BaseModel):
     product_facts_used: list[str]  # for the grounding eval
 
 
+# --- Analytics generative-UI dashboard ------------------------------------------------
+
+
+class DashboardStat(BaseModel):
+    """A single headline metric for the analytics dashboard."""
+
+    label: str
+    value: str  # pre-formatted (e.g. "LKR 105,850", "73", "4.2%")
+    hint: str | None = None  # optional sub-label / context
+
+
+class DashboardTable(BaseModel):
+    """An optional small results table (stringified cells for display)."""
+
+    columns: list[str]
+    rows: list[list[str]]
+
+
+class AnalyticsDashboard(BaseModel):
+    """A compact dashboard composed from an analytics answer — the generative-UI payload.
+
+    Built post-hoc from the agent's final answer (+ its last query result) and rendered two ways:
+    the useStream UI consumes it via push_ui_message/LoadExternalComponent; the CopilotKit UI via
+    A2UI surfaces. `stats` empty + no `table` means "nothing dashboard-worthy" → skip rendering."""
+
+    title: str
+    stats: list[DashboardStat] = Field(default_factory=list)
+    table: DashboardTable | None = None
+
+
 # --- Runtime context (per-run; injected via context_schema) ---------------------------
 
 

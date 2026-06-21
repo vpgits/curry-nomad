@@ -18,13 +18,14 @@ from typing import Literal
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.ui import push_ui_message
 from langgraph.types import Command
 
 from nora.analytics.graph import build_analytics_graph
 from nora.config import Settings, get_settings
 from nora.marketing.graph import build_marketing_graph, initial_marketing_state
 from nora.observability import get_logger
-from nora.schemas import Context, RouteDecision
+from nora.schemas import AnalyticsDashboard, Context, RouteDecision
 from nora.state import OrchestratorState
 
 log = get_logger(__name__)
@@ -48,12 +49,56 @@ def _last_user_text(messages: list) -> str:
     return ""
 
 
+DASHBOARD_INSTRUCTIONS = (
+    "Compose a compact operator dashboard from this analytics answer. Extract 1-4 headline stats "
+    "as label + a pre-formatted value (e.g. value 'LKR 105,850', '73', '4.2%'). If the data is "
+    "naturally tabular, add a small table (<= 6 rows) of stringified cells. If nothing is "
+    "dashboard-worthy (a single trivial number, or a non-data answer), return empty stats and no "
+    "table."
+)
+
+
+def _build_dashboard(model, final_message, trace) -> AnalyticsDashboard | None:
+    """Best-effort generative-UI dashboard from the final answer + the SQL the agent ran.
+
+    Returns None (and the caller renders nothing) when generation fails or the answer isn't
+    dashboard-worthy — generative UI is a nicety, never load-bearing for the text answer."""
+    answer = (
+        final_message.content
+        if isinstance(final_message.content, str)
+        else str(final_message.content)
+    )
+    if not answer.strip():
+        return None
+    query_results = "\n\n".join(
+        call["result"]
+        for step in trace
+        for call in step["calls"]
+        if call["name"] == "run_sql" and call.get("result")
+    )
+    context = f"Answer:\n{answer}"
+    if query_results:
+        context += f"\n\nQuery results the answer is based on:\n{query_results[:2000]}"
+    try:
+        dashboard: AnalyticsDashboard = model.with_structured_output(AnalyticsDashboard).invoke(
+            [SystemMessage(content=DASHBOARD_INSTRUCTIONS), HumanMessage(content=context)]
+        )
+    except Exception as exc:  # noqa: BLE001 — optional generative UI: never break the text answer
+        log.info("dashboard.skipped", error=str(exc))
+        return None
+    if not dashboard.stats and dashboard.table is None:
+        return None
+    log.info("dashboard.built", stats=len(dashboard.stats), has_table=dashboard.table is not None)
+    return dashboard
+
+
 def build_orchestrator(
     *,
     settings: Settings | None = None,
     router_model=None,
     analytics_graph=None,
     marketing_graph=None,
+    dashboard_model=None,
     checkpointer=None,
     store=None,
 ):
@@ -67,6 +112,14 @@ def build_orchestrator(
         analytics_graph = build_analytics_graph(settings=settings, store=store)
     if marketing_graph is None:
         marketing_graph = build_marketing_graph(settings=settings, store=store, auto_approve=False)
+    if dashboard_model is None:
+        # Composes the generative-UI dashboard from an analytics answer. Construction needs a
+        # provider key; without one (e.g. offline tests that don't inject a fake) we simply disable
+        # the dashboard — never the text answer.
+        try:
+            dashboard_model = init_chat_model(settings.model, temperature=0)
+        except Exception:  # noqa: BLE001 — no key → dashboards off, the rest of the app still runs
+            dashboard_model = None
 
     def route(state: OrchestratorState) -> Command[Literal["analytics", "marketing", "clarify"]]:
         classifier = router_model.with_structured_output(RouteDecision)
@@ -116,6 +169,17 @@ def build_orchestrator(
 
         if trace:
             final.additional_kwargs = {**(final.additional_kwargs or {}), "tool_trace": trace}
+
+        # Generative UI: compose a compact dashboard from the answer (+ the SQL results the agent
+        # saw) and push it as a UI message — the useStream UI renders it via LoadExternalComponent.
+        # Best-effort: skips silently if generation fails (e.g. no provider key offline) or nothing
+        # is dashboard-worthy. (The CopilotKit UI gets the same data as A2UI; see make_graph notes.)
+        dashboard = _build_dashboard(dashboard_model, final, trace) if dashboard_model else None
+        if dashboard is not None:
+            data = dashboard.model_dump()
+            final.additional_kwargs = {**(final.additional_kwargs or {}), "dashboard": data}
+            push_ui_message("analytics_dashboard", data, message=final)
+
         return {"messages": [final]}
 
     def marketing(state: OrchestratorState, config) -> dict:
