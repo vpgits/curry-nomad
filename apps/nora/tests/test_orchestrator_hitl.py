@@ -15,6 +15,8 @@ dodges that. This test fails if anyone reintroduces Pydantic objects into graph 
 
 from __future__ import annotations
 
+import json
+
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
@@ -55,8 +57,14 @@ def _orchestrator(checkpointer):
     )
 
 
-def _drive_pause_then_resume(checkpointer, thread_id: str) -> AIMessage:
-    """Run the canonical demo: marketing request → pause at human_review → resume(approve)."""
+def _drive_pause_then_resume(checkpointer, thread_id: str, resume=None) -> AIMessage:
+    """Run the canonical demo: marketing request → pause at human_review → resume.
+
+    `resume` defaults to the structured dict a useStream `Command(resume=...)` sends. Pass a JSON
+    *string* to exercise the CopilotKit transport, whose `useLangGraphInterrupt` resolves with a
+    string (see `human_review`'s normalization guard in marketing/nodes.py)."""
+    if resume is None:
+        resume = {"approved": True}
     graph = _orchestrator(checkpointer)
     config = {"configurable": {"thread_id": thread_id}}
 
@@ -65,7 +73,7 @@ def _drive_pause_then_resume(checkpointer, thread_id: str) -> AIMessage:
     assert state.interrupts, "interrupt from the marketing subgraph must surface on the orchestrator"
     assert state.next == ("marketing",), "the orchestrator pauses with the marketing node pending"
 
-    result = graph.invoke(Command(resume={"approved": True}), config)
+    result = graph.invoke(Command(resume=resume), config)
     assert not graph.get_state(config).interrupts, "resume must clear the interrupt, not re-pause"
     return result["messages"][-1]
 
@@ -75,6 +83,26 @@ def test_orchestrator_pauses_and_resumes_across_subgraph():
     assert "Video brief ready" in final.content
     brief = final.additional_kwargs["video_brief"]
     assert isinstance(brief, dict) and brief["product_name"]  # JSON-native, ready for the UI
+
+
+def test_orchestrator_resume_accepts_copilotkit_json_string_approve():
+    """CopilotKit's `useLangGraphInterrupt` resolves with a *string*, not a dict. An approve sent
+    as `Command(resume='{"approved": true}')` must parse back to a dict and proceed to the brief —
+    the same outcome as the useStream dict path."""
+    final = _drive_pause_then_resume(
+        build_checkpointer(), "orch-hitl-ck-approve", resume=json.dumps({"approved": True})
+    )
+    assert "Video brief ready" in final.content
+
+
+def test_orchestrator_resume_accepts_copilotkit_json_string_reject():
+    """The guard's load-bearing case: a *reject* sent as the string `'{"approved": false}'`. Without
+    json.loads normalization the node would fall back to `bool(decision)`, and a non-empty string is
+    truthy — silently approving a rejection. With the guard it must cancel."""
+    final = _drive_pause_then_resume(
+        build_checkpointer(), "orch-hitl-ck-reject", resume=json.dumps({"approved": False})
+    )
+    assert "cancelled" in final.content.lower()
 
 
 def test_orchestrator_resume_survives_strict_msgpack():
