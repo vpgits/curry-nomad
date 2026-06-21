@@ -30,3 +30,7 @@ node_modules/
 
 # NOTE: apps/nora/src/nora/data/curry_nomad.db is intentionally committed (the bundled,
 # deterministic demo dataset). Do not add a blanket *.db / *.sqlite ignore.
+
+# Operations runtime DB (writable; rebuilt by `python -m nora.operations.seed`). A specific
+# path, NOT a blanket *.db glob, so the committed dataset above stays tracked.
+apps/nora/src/nora/data/runtime/

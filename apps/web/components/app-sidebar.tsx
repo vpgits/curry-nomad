@@ -4,7 +4,7 @@ import { useEffect, type ComponentProps } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useQueryState } from "nuqs";
-import { ChefHat, History, MessageSquare, SquarePen } from "lucide-react";
+import { Boxes, ChefHat, History, MessageSquare, SquarePen } from "lucide-react";
 import type { Thread } from "@langchain/langgraph-sdk";
 
 import {
@@ -23,9 +23,11 @@ import {
 } from "@/components/ui/sidebar";
 import { useThreads } from "@/providers/Thread";
 
-// The chat surface, backed by the Nora graph on the LangGraph server. `/` owns the threadId URL state + history.
+// The chat surface, backed by the Nora graph on the LangGraph server. `/` owns the threadId URL
+// state + history. `/inventory` is the standalone, non-agentic operations console.
 const NAV = [
   { href: "/", label: "Nora chat", icon: MessageSquare },
+  { href: "/inventory", label: "Inventory", icon: Boxes },
 ] as const;
 
 // The title is stamped onto thread metadata at creation (StreamProvider.titleThread) — the

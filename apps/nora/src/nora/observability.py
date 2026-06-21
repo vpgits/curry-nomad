@@ -41,6 +41,16 @@ EVENTS = {
     "marketing.revision": "iteration, verdict",
     "render.placeholder": "shots",
     "eval.scored": "id, metric, score",
+    # Operations (inventory + orders + delivery routing). Every mutation logs one event;
+    # rejections (the agentic "limits" — oversell, write-off below zero) get their own keys.
+    "ops.receive": "product_id, qty, on_hand",
+    "ops.adjust": "product_id, qty_delta, on_hand, reason",
+    "ops.write_off_rejected": "product_id, qty_delta, on_hand, reserved",
+    "ops.order_created": "order_id, customer_id, total_lkr, lines",
+    "ops.oversell_rejected": "product_id, requested, available",
+    "ops.route_planned": "route_id, stops, total_km, naive_km",
+    "ops.dispatched": "route_id, deliveries",
+    "ops.seed.built": "products, orders, deliveries",
 }
 
 _configured = False

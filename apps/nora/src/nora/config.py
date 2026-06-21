@@ -26,6 +26,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # class of bug this project is teaching against).
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _DEFAULT_DB_PATH = _PACKAGE_DIR / "data" / "curry_nomad.db"
+# The operations capability owns a *writable* SQLite DB, kept separate from the read-only
+# bundled `curry_nomad.db` so the committed dataset stays pristine and deterministic. It lives
+# in a gitignored `data/runtime/` dir (package-relative, so it's cwd-independent like the DB
+# above) and is (re)built by `python -m nora.operations.seed`.
+_DEFAULT_OPS_DB_PATH = _PACKAGE_DIR / "data" / "runtime" / "operations.db"
 
 
 class Settings(BaseSettings):
@@ -46,6 +51,7 @@ class Settings(BaseSettings):
 
     # --- Data ---
     db_path: Path = _DEFAULT_DB_PATH
+    ops_db_path: Path = _DEFAULT_OPS_DB_PATH  # writable operations DB (NORA_OPS_DB_PATH)
     data_as_of: date = date(2026, 6, 30)  # fixed "today" for deterministic time queries
 
     # --- Analytics tool guards ---

@@ -28,6 +28,20 @@ openrouter = ["httpx>=0.27"]
 # Optional Langfuse tracing. Enable with `uv sync --extra langfuse`, then set the LANGFUSE_*
 # env vars (see .env.example) — the CLI attaches a LangChain CallbackHandler and traces the run.
 langfuse = ["langfuse>=3"]
+# Phase-1 operations system: a small FastAPI REST API in front of the deterministic
+# inventory/orders/routing services. Kept an optional extra (like anthropic/langfuse) so the base
+# install + offline graph tests stay dependency-light. Enable: `uv sync --extra operations`.
+operations = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "httpx>=0.27",  # Starlette's TestClient (used by the offline API tests) needs it
+]
+
+[project.scripts]
+# Build the writable operations DB (deterministic; safe to re-run). Needs no provider key.
+nora-ops-seed = "nora.operations.seed:main"
+# Serve the operations REST API on :8000 (thin uvicorn.run wrapper). Needs `--extra operations`.
+nora-ops-api = "nora.operations.api:run"
 
 [dependency-groups]
 # Installed by `uv sync` by default. langgraph-cli powers `langgraph dev` (M4).
