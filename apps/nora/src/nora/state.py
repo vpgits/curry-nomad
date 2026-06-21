@@ -24,6 +24,7 @@ from __future__ import annotations
 import operator
 from typing import Annotated, NotRequired, TypedDict
 
+from copilotkit import CopilotKitState
 from langgraph.graph.message import add_messages
 
 
@@ -40,10 +41,15 @@ def reset_or_extend(current: list, update) -> list:
     return (current or []) + list(update)
 
 
-class OrchestratorState(TypedDict):
-    """Top-level router state."""
+class OrchestratorState(CopilotKitState):
+    """Top-level router state.
 
-    messages: Annotated[list, add_messages]
+    Extends `CopilotKitState` so the *same* `nora` graph cleanly serves two frontends: our own
+    useStream client and a CopilotKit (AG-UI) client. `CopilotKitState` (itself a `MessagesState`)
+    contributes `messages` — keeping the `add_messages` reducer — plus the `copilotkit` channel
+    (`actions`: the frontend tools CopilotKit injects per run). `route` is our own addition. Both
+    extra channels are JSON-native dicts, so checkpoints still survive strict msgpack (see below)."""
+
     route: NotRequired[dict]  # RouteDecision.model_dump()
 
 

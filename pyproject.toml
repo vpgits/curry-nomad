@@ -17,6 +17,7 @@ dependencies = [
     "pydantic-settings>=2.3",
     "structlog>=24.1",
     "tenacity>=8.3",
+    "copilotkit>=0.1.94",
 ]
 
 [project.optional-dependencies]

@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, ChefHat, Menu, Square } from "lucide-react";
+import Link from "next/link";
+import { ArrowDown, ArrowUp, ChefHat, Menu, Sparkles, Square } from "lucide-react";
 import type { Message } from "@langchain/langgraph-sdk";
 
 import { ApprovalCard } from "@/components/ApprovalCard";
@@ -95,6 +96,14 @@ export function Thread() {
                 One assistant, two paradigms — an analytics agent and a marketing workflow.
               </p>
             </div>
+            <Link
+              href="/copilot"
+              className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+              title="Open the CopilotKit variant"
+            >
+              <Sparkles className="size-3.5" />
+              <span className="hidden sm:inline">CopilotKit</span>
+            </Link>
           </div>
         </header>
 
