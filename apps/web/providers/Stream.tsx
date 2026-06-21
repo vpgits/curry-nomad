@@ -2,6 +2,11 @@
 
 import { createContext, useContext, type ReactNode } from "react";
 import { useStream } from "@langchain/langgraph-sdk/react";
+import {
+  uiMessageReducer,
+  type RemoveUIMessage,
+  type UIMessage,
+} from "@langchain/langgraph-sdk/react-ui";
 import { useQueryState } from "nuqs";
 import { toast } from "sonner";
 import type { Message } from "@langchain/langgraph-sdk";
@@ -28,7 +33,10 @@ async function titleThread(id: string): Promise<void> {
 }
 
 // Instantiation expression (TS 4.7+): pin the generic hook to our state/update shape once.
-const useTypedStream = useStream<NoraState, { UpdateType: NoraUpdate }>;
+const useTypedStream = useStream<
+  NoraState,
+  { UpdateType: NoraUpdate; CustomEventType: UIMessage | RemoveUIMessage }
+>;
 type StreamContextType = ReturnType<typeof useTypedStream>;
 
 const StreamContext = createContext<StreamContextType | undefined>(undefined);
@@ -61,6 +69,14 @@ export function StreamProvider({ children }: { children: ReactNode }) {
       toast.error("Something went wrong", {
         description: err instanceof Error ? err.message : String(err),
       });
+    },
+    // Generative UI: fold streamed push_ui_message events into `values.ui` so the dashboard can
+    // render progressively (the values stream also carries the final `ui` channel).
+    onCustomEvent: (event, options) => {
+      options.mutate((prev) => ({
+        ...prev,
+        ui: uiMessageReducer(prev.ui ?? [], event),
+      }));
     },
   });
 

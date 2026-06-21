@@ -1,15 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ComponentProps } from "react";
 import { ChefHat, Check, Copy, RefreshCw, Wrench } from "lucide-react";
 import type { Message } from "@langchain/langgraph-sdk";
 
+import { LoadExternalComponent } from "@langchain/langgraph-sdk/react-ui";
+
+import { AnalyticsDashboard } from "@/components/AnalyticsDashboard";
 import { SqlTraceCard } from "@/components/SqlTraceCard";
 import { VideoBriefCard } from "@/components/VideoBriefCard";
 import { cn, getContentString, getNoraKwargs } from "@/lib/utils";
 import { useStreamContext } from "@/providers/Stream";
 import { MarkdownText } from "../markdown";
 import { BranchSwitcher } from "./shared";
+
+// Client-side component map for push_ui_message UI messages — LoadExternalComponent renders these
+// directly (no remote bundle fetch, which Aegra can't serve anyway).
+const UI_COMPONENTS = { analytics_dashboard: AnalyticsDashboard };
 
 export function NoraAvatar() {
   return (
@@ -35,6 +42,10 @@ export function AssistantMessage({
   const toolCalls =
     (message as { tool_calls?: { name: string; args: Record<string, unknown> }[] }).tool_calls ??
     [];
+  // push_ui_message UI messages tagged to this AI message (the generative-UI dashboard).
+  const uiForMessage = (stream.values.ui ?? []).filter(
+    (ui) => (ui.metadata as { message_id?: string } | undefined)?.message_id === message.id,
+  );
 
   const [copied, setCopied] = useState(false);
   const copy = () => {
@@ -65,6 +76,20 @@ export function AssistantMessage({
         {toolTrace && toolTrace.length > 0 && <SqlTraceCard trace={toolTrace} />}
 
         {brief && <VideoBriefCard brief={brief} />}
+
+        {uiForMessage.map((ui) => (
+          <LoadExternalComponent
+            key={ui.id}
+            // Cast at the boundary: LoadExternalComponent's prop types are deliberately loose
+            // (Record<string, unknown> state, {}-prop components); our typed stream + dashboard
+            // component are stricter. Runtime behaviour is correct (ui.props → AnalyticsDashboard).
+            stream={stream as ComponentProps<typeof LoadExternalComponent>["stream"]}
+            message={ui}
+            components={
+              UI_COMPONENTS as unknown as ComponentProps<typeof LoadExternalComponent>["components"]
+            }
+          />
+        ))}
 
         <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
           <BranchSwitcher

@@ -4,6 +4,7 @@
 // type-safely.
 
 import type { Message } from "@langchain/langgraph-sdk";
+import type { UIMessage } from "@langchain/langgraph-sdk/react-ui";
 
 export interface ScriptBeat {
   t_start_s: number;
@@ -70,10 +71,31 @@ export interface ReviewDecision {
   edited_script?: ScriptBeat[];
 }
 
+// The analytics generative-UI dashboard (mirrors AnalyticsDashboard in schemas.py). Rendered two
+// ways from the same data: useStream via LoadExternalComponent, CopilotKit via A2UI.
+export interface DashboardStat {
+  label: string;
+  value: string;
+  hint?: string | null;
+}
+
+export interface DashboardTable {
+  columns: string[];
+  rows: string[][];
+}
+
+export interface AnalyticsDashboardData {
+  title: string;
+  stats: DashboardStat[];
+  table?: DashboardTable | null;
+}
+
 // Orchestrator graph state surfaced by useStream. Must be a `type` (not an interface) so it
 // satisfies useStream's `Record<string, unknown>` state constraint.
 export type NoraState = {
   messages: Message[];
+  // Generative-UI messages pushed by the backend (push_ui_message); rendered via LoadExternalComponent.
+  ui?: UIMessage[];
 };
 
 // Update type accepted by stream.submit() — a fresh human turn.
