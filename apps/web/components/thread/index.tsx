@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { ReviewDecision, ReviewInterrupt } from "@/lib/types";
 import { useStreamContext } from "@/providers/Stream";
-import { AssistantMessage, NoraAvatar, ToolResultMessage } from "./messages/ai";
+import { AssistantMessage, NoraAvatar } from "./messages/ai";
 import { HumanMessage } from "./messages/human";
 
 const SUGGESTIONS = [
@@ -198,9 +198,8 @@ function MessageList({
                   />
                 );
               }
-              if (message.type === "tool") {
-                return <ToolResultMessage key={message.id ?? idx} message={message} />;
-              }
+              // Tool result messages aren't rendered loose — each is paired into its tool call's
+              // collapsible card (ToolStep) inside the AssistantMessage above.
               return null;
             })}
 
