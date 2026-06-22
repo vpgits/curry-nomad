@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     ops_db_path: Path = _DEFAULT_OPS_DB_PATH  # writable operations DB (NORA_OPS_DB_PATH)
     data_as_of: date = date(2026, 6, 30)  # fixed "today" for deterministic time queries
 
+    # --- Operations service ---
+    # The routing capability plans a delivery route by calling the ops API (the same service the web
+    # app uses), so the writable ops DB stays single-owner. Override with NORA_OPS_API_URL.
+    ops_api_url: str = "http://localhost:8000"
+
     # --- Analytics tool guards ---
     max_sql_rows: int = 200  # LIMIT cap injected into run_sql
     sql_timeout_s: float = 5.0  # statement timeout

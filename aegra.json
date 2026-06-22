@@ -1,7 +1,8 @@
 {
   "dependencies": ["./apps/nora/src"],
   "graphs": {
-    "nora": "./apps/nora/src/nora/orchestrator.py:make_graph"
+    "nora": "./apps/nora/src/nora/orchestrator.py:make_graph",
+    "nora_a2ui": "./apps/nora/src/nora/a2ui_studio.py:make_a2ui_graph"
   },
   "store": {
     "index": {

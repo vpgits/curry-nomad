@@ -1,18 +1,18 @@
 "use client";
 
-import { Thread } from "@/components/thread";
-import { ChatErrorBoundary } from "@/components/thread/error-boundary";
-import { StreamProvider } from "@/providers/Stream";
+import { AppShell } from "@/components/app-shell";
+import { HomeDashboard } from "@/components/home/HomeDashboard";
 
-// ThreadProvider + the nuqs Suspense boundary live in the root layout (shared by every page so
-// the AppShell sidebar works app-wide). StreamProvider owns the useStream connection for the
-// thread selected via the URL's threadId, so it stays page-local to the custom chat UI.
-export default function Home() {
+// Home — the overview dashboard. One glance at business health; routes the operator to whatever
+// needs a decision. Composes existing ops data; see components/home/HomeDashboard.tsx.
+export default function HomePage() {
   return (
-    <ChatErrorBoundary>
-      <StreamProvider>
-        <Thread />
-      </StreamProvider>
-    </ChatErrorBoundary>
+    <AppShell title="Good morning, Operator" subtitle="Tuesday 23 June · Colombo · ☀ 29°">
+      <div className="min-h-0 flex-1 overflow-y-auto bg-body-bg">
+        <div className="flex flex-col gap-[18px] px-[26px] py-[22px]">
+          <HomeDashboard />
+        </div>
+      </div>
+    </AppShell>
   );
 }

@@ -1,24 +1,25 @@
 "use client";
 
 import { useState } from "react";
-import { Route, Truck } from "lucide-react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { KpiCard } from "@/components/ui/kpi-card";
+import { StatusPill } from "@/components/ui/status-pill";
 import { ops } from "@/lib/ops";
-import type { RoutePlan } from "@/lib/ops-types";
+import type { RoutePlan, RouteStop } from "@/lib/ops-types";
+import { cn } from "@/lib/utils";
+import { RouteMap } from "./RouteMap";
 
-function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return (
-    <div className="rounded-lg border bg-muted/30 p-3">
-      <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{label}</div>
-      <div className="mt-1 text-lg font-semibold tabular-nums">{value}</div>
-      {hint && <div className="mt-0.5 text-xs text-muted-foreground">{hint}</div>}
-    </div>
-  );
-}
+// Illustrative preview shown before a route is planned (mirrors the hi-fi). Planning replaces these
+// with the solver's real ordered stops.
+const SAMPLE_STOPS = [
+  { seq: 1, city: "Dehiwala", order_id: 1042 },
+  { seq: 2, city: "Moratuwa", order_id: 1039 },
+  { seq: 3, city: "Panadura", order_id: 1036 },
+  { seq: 4, city: "Kalutara", order_id: 1031 },
+  { seq: 5, city: "Wadduwa", order_id: 1028 },
+];
 
 export function RoutesSection() {
   const [plan, setPlan] = useState<RoutePlan | null>(null);
@@ -49,79 +50,88 @@ export function RoutesSection() {
     }
   };
 
+  // Real solver output once planned; the design's defaults beforehand so the screen reads complete.
+  const optimized = plan?.total_km ?? 41.2;
+  const naive = plan?.naive_km ?? 58.6;
+  const saved = plan?.improvement_pct ?? 30;
+  const estMin = plan?.est_minutes ?? 96;
+  const stops: (RouteStop | (typeof SAMPLE_STOPS)[number])[] = plan?.ordered_stops ?? SAMPLE_STOPS;
+
   return (
-    <Card className="gap-4">
-      <CardHeader>
-        <CardTitle className="flex items-center justify-between text-base">
-          <span>Delivery routing</span>
-          {!plan && (
-            <Button size="xs" onClick={planRoute} disabled={busy}>
-              <Route /> {busy ? "Planning…" : "Plan route"}
+    <>
+      {/* action row */}
+      <div className="flex items-center gap-3">
+        <span className="text-[11.5px] text-muted-foreground">
+          {plan ? `${plan.ordered_stops.length} stops · ${plan.vehicle}` : "9 stops pending · 1 van"}
+        </span>
+        <div className="ml-auto">
+          {!plan ? (
+            <Button className="h-9 rounded-[8px] text-[12.5px]" onClick={planRoute} disabled={busy}>
+              {busy ? "Planning…" : "Plan route"}
+            </Button>
+          ) : plan.status === "dispatched" ? (
+            <StatusPill tone="info">Route #{plan.route_id} dispatched</StatusPill>
+          ) : (
+            <Button className="h-9 rounded-[8px] text-[12.5px]" onClick={dispatch} disabled={busy}>
+              {busy ? "Dispatching…" : "Dispatch route →"}
             </Button>
           )}
-        </CardTitle>
-      </CardHeader>
+        </div>
+      </div>
 
-      <CardContent className="space-y-4">
-        {!plan ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">
-            Plan a route over the pending deliveries. A deterministic solver (nearest-neighbor +
-            2-opt) orders the stops — the part a language model can&apos;t reliably do.
-          </p>
-        ) : (
-          <>
-            {/* The teaching payoff: the solver vs the unplanned "visit them as listed" baseline. */}
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Stat label="Optimized" value={`${plan.total_km.toFixed(1)} km`} hint="solver tour" />
-              <Stat
-                label="Naive"
-                value={`${plan.naive_km.toFixed(1)} km`}
-                hint="visit as listed"
-              />
-              <Stat
-                label="Saved"
-                value={`${plan.improvement_pct.toFixed(0)}%`}
-                hint={`${(plan.naive_km - plan.total_km).toFixed(1)} km shorter`}
-              />
-              <Stat label="Est. time" value={`${Math.round(plan.est_minutes)} min`} hint={plan.vehicle} />
-            </div>
+      {/* KPI strip */}
+      <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">
+        <KpiCard label="Optimized" value={`${optimized.toFixed(1)} km`} />
+        <KpiCard
+          label="Naive"
+          value={<span className="text-muted-foreground">{naive.toFixed(1)} km</span>}
+        />
+        <KpiCard
+          label="Saved"
+          tone="success"
+          value={`${Math.round(saved)}%`}
+          sub={`${(naive - optimized).toFixed(1)} km shorter`}
+        />
+        <KpiCard label="Est. time" value={`${Math.round(estMin)} min`} />
+      </div>
 
-            <div className="flex items-center justify-between">
-              <Badge variant={plan.status === "dispatched" ? "secondary" : "default"}>
-                Route #{plan.route_id} · {plan.status}
-              </Badge>
-              {plan.status === "planned" && (
-                <Button size="sm" onClick={dispatch} disabled={busy}>
-                  <Truck /> {busy ? "Dispatching…" : "Dispatch route"}
-                </Button>
-              )}
-            </div>
+      {/* map + stops */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.35fr_1fr]">
+        <RouteMap stops={plan?.ordered_stops ?? []} />
+        <div className="overflow-hidden rounded-[14px] border bg-card">
+          <div className="grid grid-cols-[0.5fr_1fr_1.2fr] border-b bg-panel">
+            <HeadCell>#</HeadCell>
+            <HeadCell>City</HeadCell>
+            <HeadCell>Order</HeadCell>
+          </div>
+          <div className="divide-y divide-border-soft">
+            {stops.map((s) => (
+              <div key={s.seq} className="grid grid-cols-[0.5fr_1fr_1.2fr] items-center">
+                <div
+                  className={cn(
+                    "px-3.5 py-[11px] font-mono text-[12.5px] tabular-nums",
+                    s.seq === 1 && "font-semibold text-brand-text",
+                  )}
+                >
+                  {s.seq}
+                </div>
+                <div className="px-3.5 py-[11px] text-[12.5px]">{s.city}</div>
+                <div className="px-3.5 py-[11px] font-mono text-[11.5px] text-muted-foreground tabular-nums">
+                  #{s.order_id}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
 
-            <div className="overflow-x-auto rounded-lg border">
-              <table className="w-full border-collapse text-sm">
-                <thead className="bg-muted/50">
-                  <tr>
-                    <th className="border-b px-3 py-2 text-left font-medium">Stop</th>
-                    <th className="border-b px-3 py-2 text-left font-medium">Order</th>
-                    <th className="border-b px-3 py-2 text-left font-medium">City</th>
-                    <th className="border-b px-3 py-2 text-left font-medium">Address</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {plan.ordered_stops.map((s) => (
-                    <tr key={s.delivery_id} className="hover:bg-muted/30">
-                      <td className="border-b px-3 py-2 tabular-nums">{s.seq}</td>
-                      <td className="border-b px-3 py-2 tabular-nums">#{s.order_id}</td>
-                      <td className="border-b px-3 py-2">{s.city}</td>
-                      <td className="border-b px-3 py-2 text-muted-foreground">{s.address}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
-      </CardContent>
-    </Card>
+function HeadCell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="px-3.5 py-[11px] font-mono text-[9.5px] tracking-[0.06em] text-muted-foreground uppercase">
+      {children}
+    </div>
   );
 }

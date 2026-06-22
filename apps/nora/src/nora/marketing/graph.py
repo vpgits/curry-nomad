@@ -47,12 +47,18 @@ def build_marketing_graph(
     checkpointer=None,
     store=None,
     auto_approve: bool = False,
+    auto_choose: bool = True,
 ):
     """Compile the marketing workflow. `model`/`spice_db` are injectable for offline tests.
 
     `auto_approve=True` makes the human_review gate pass through without interrupting (eval
     mode). With the default (False), running the graph requires a checkpointer + thread_id so
     the interrupt can pause and resume.
+
+    `auto_choose` controls the concept gate and defaults to True (auto-pick the first concept) so
+    every unattended caller — evals and the offline tests — keeps its single, script-review
+    interrupt. The orchestrator passes `auto_choose=False` to add the interactive concept-pick
+    gate before the script gate.
     """
     settings = settings or get_settings()
     if model is None:
@@ -71,7 +77,7 @@ def build_marketing_graph(
     builder.add_node("fetch_product", nodes.make_fetch_product(settings, spice_db))
     builder.add_node("load_brand", nodes.make_load_brand(settings))
     builder.add_node("ideate", nodes.make_ideate(model, settings))
-    builder.add_node("choose_concept", nodes.make_choose_concept(settings))
+    builder.add_node("choose_concept", nodes.make_choose_concept(settings, auto_choose=auto_choose))
     builder.add_node("write_script", nodes.make_write_script(model, settings))
     builder.add_node("human_review", nodes.make_human_review(settings, auto_approve=auto_approve))
     builder.add_node("cancel", nodes.make_cancel(settings))

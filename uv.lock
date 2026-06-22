@@ -301,6 +301,7 @@ name = "curry-nomad"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "httpx" },
     { name = "langchain" },
     { name = "langchain-openai" },
     { name = "langgraph" },
@@ -339,6 +340,7 @@ dev = [
 requires-dist = [
     { name = "aegra-cli", marker = "extra == 'aegra'", specifier = ">=0.9.22" },
     { name = "fastapi", marker = "extra == 'operations'", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "httpx", marker = "extra == 'openrouter'", specifier = ">=0.27" },
     { name = "httpx", marker = "extra == 'operations'", specifier = ">=0.27" },
     { name = "langchain", specifier = ">=1.0,<2.0" },

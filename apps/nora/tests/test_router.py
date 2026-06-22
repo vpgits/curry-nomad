@@ -34,6 +34,15 @@ def _cfg(thread_id: str) -> dict:
     return {"configurable": {"thread_id": thread_id}}
 
 
+def _brief_from_ui(result) -> dict | None:
+    """The marketing brief rides the generative-UI channel now (push_ui_message("video_brief",
+    {"brief": ...})), not additional_kwargs — pull it back out of result["ui"]."""
+    for ui in result.get("ui", []):
+        if ui.get("name") == "video_brief":
+            return ui["props"]["brief"]
+    return None
+
+
 def test_data_question_routes_to_analytics():
     orch = build_orchestrator(
         router_model=_router(RouteDecision(capability="analytics", reason="data question")),
@@ -96,7 +105,7 @@ def test_marketing_request_routes_and_carries_product_hint():
     result = orch.invoke({"messages": [HumanMessage("make a 30s reel for it")]}, _cfg("m1"))
     assert result["route"]["capability"] == "marketing"
     # product_hint flowed into the marketing run and grounded the brief in that product.
-    brief = result["messages"][-1].additional_kwargs["video_brief"]
+    brief = _brief_from_ui(result)
     assert "Roasted Curry Powder" in brief["product_name"]
 
 
@@ -136,9 +145,9 @@ def test_canonical_demo_flow_on_one_thread():
     assert "__interrupt__" in r2
     assert orch.get_state(cfg).interrupts
 
-    # Resume the same thread — the workflow finishes and returns the brief.
+    # Resume the same thread — the workflow finishes and pushes the brief on the UI channel.
     r3 = orch.invoke(Command(resume={"approved": True}), cfg)
-    brief = r3["messages"][-1].additional_kwargs["video_brief"]
+    brief = _brief_from_ui(r3)
     assert "Ceylon Cinnamon" in brief["product_name"]
 
 

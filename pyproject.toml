@@ -17,6 +17,10 @@ dependencies = [
     "pydantic-settings>=2.3",
     "structlog>=24.1",
     "tenacity>=8.3",
+    # The routing capability calls the ops REST API (POST /routes/plan) to plan a delivery route and
+    # render the route_map card; httpx is the client (small, and already a transitive dep via the
+    # openrouter/operations extras).
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]

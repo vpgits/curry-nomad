@@ -76,7 +76,7 @@ export function HumanMessage({ message, isLoading }: { message: Message; isLoadi
 
   return (
     <div className="group flex flex-col items-end gap-1">
-      <div className="max-w-[80%] rounded-2xl bg-primary px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap text-primary-foreground">
+      <div className="max-w-[75%] rounded-[13px_5px_13px_13px] bg-ink px-[15px] py-[11px] text-[13.5px] leading-[1.5] whitespace-pre-wrap text-ink-foreground sm:max-w-[60%]">
         {content}
       </div>
       <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">

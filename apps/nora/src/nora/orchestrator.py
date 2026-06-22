@@ -35,6 +35,8 @@ ROUTER_INSTRUCTIONS = (
     "- 'analytics': questions about business data/metrics (sales, revenue, products, "
     "customers, refunds, channels, time windows).\n"
     "- 'marketing': requests to CREATE or GENERATE a video ad / reel / creative for a product.\n"
+    "- 'routing': requests to PLAN, OPTIMIZE, or SHOW today's delivery route / the delivery map "
+    "(which stops, in what order, how far, dispatch the van).\n"
     "- 'clarify': ambiguous, or neither of the above.\n\n"
     "For a marketing request that references a product (by name, or 'it'/'that one' pointing "
     "at a product discussed earlier), set product_hint to that product's name. Always give a "
@@ -52,9 +54,14 @@ def _last_user_text(messages: list) -> str:
 DASHBOARD_INSTRUCTIONS = (
     "Compose a compact operator dashboard from this analytics answer. Extract 1-4 headline stats "
     "as label + a pre-formatted value (e.g. value 'LKR 105,850', '73', '4.2%'). If the data is "
-    "naturally tabular, add a small table (<= 6 rows) of stringified cells. If nothing is "
-    "dashboard-worthy (a single trivial number, or a non-data answer), return empty stats and no "
-    "table."
+    "naturally tabular, add a small table (<= 6 rows) of stringified cells. "
+    "Also CHOOSE a chart when the data suits one — this is the point: pick the kind that fits the "
+    "shape. A trend over time → kind 'line'; a ranking or comparison across categories → kind "
+    "'bar'; a part-of-whole breakdown (shares that sum to a whole) → kind 'pie'; otherwise kind "
+    "'none'. Give up to ~8 series points (short label + numeric value), and set x_label/y_label "
+    "for bar/line; keep the series consistent with the table when both are present. If nothing is "
+    "dashboard-worthy (a single trivial number, or a non-data answer), return empty stats, no "
+    "table, and chart kind 'none'."
 )
 
 
@@ -94,10 +101,34 @@ def _build_dashboard(model, answer: str, query_results: str) -> AnalyticsDashboa
     except Exception as exc:  # noqa: BLE001 — optional generative UI: never break the text answer
         log.info("dashboard.skipped", error=str(exc))
         return None
-    if not dashboard.stats and dashboard.table is None:
+    has_chart = (
+        dashboard.chart is not None
+        and dashboard.chart.kind != "none"
+        and bool(dashboard.chart.series)
+    )
+    if not dashboard.stats and dashboard.table is None and not has_chart:
         return None
-    log.info("dashboard.built", stats=len(dashboard.stats), has_table=dashboard.table is not None)
+    log.info(
+        "dashboard.built",
+        stats=len(dashboard.stats),
+        has_table=dashboard.table is not None,
+        chart=dashboard.chart.kind if has_chart else "none",
+    )
     return dashboard
+
+
+def _plan_route_via_ops_api(ops_api_url: str) -> dict:
+    """Plan a delivery route by calling the operations service — the SAME `POST /routes/plan` the web
+    app uses (lib/ops.ts). The agent is just another REST client of the ops API, so the writable ops
+    DB stays single-owner (no dual-writer SQLite). Returns the RoutePlan dict the endpoint emits."""
+    import httpx
+
+    resp = httpx.post(f"{ops_api_url.rstrip('/')}/routes/plan", json={}, timeout=10.0)
+    resp.raise_for_status()
+    data = resp.json()
+    if isinstance(data, dict) and "error" in data:
+        raise RuntimeError(data["error"])
+    return data
 
 
 def build_orchestrator(
@@ -107,6 +138,7 @@ def build_orchestrator(
     analytics_graph=None,
     marketing_graph=None,
     dashboard_model=None,
+    route_planner=None,
     checkpointer=None,
     store=None,
 ):
@@ -127,7 +159,11 @@ def build_orchestrator(
     if analytics_graph is None:
         analytics_graph = build_analytics_graph(settings=settings, store=store)
     if marketing_graph is None:
-        marketing_graph = build_marketing_graph(settings=settings, store=store, auto_approve=False)
+        # auto_choose=False adds the interactive concept-pick gate (generative-UI selection) before
+        # the script-review gate; the app surfaces both, evals/tests keep the single script gate.
+        marketing_graph = build_marketing_graph(
+            settings=settings, store=store, auto_approve=False, auto_choose=False
+        )
     if dashboard_model is None:
         # Composes the generative-UI dashboard from an analytics answer — another
         # with_structured_output call whose result never lands in `messages`, so disable_streaming
@@ -138,8 +174,16 @@ def build_orchestrator(
             dashboard_model = init_chat_model(settings.model, temperature=0, disable_streaming=True)
         except Exception:  # noqa: BLE001 — no key → dashboards off, the rest of the app still runs
             dashboard_model = None
+    if route_planner is None:
+        # The routing capability plans a route by calling the ops API. Injectable so offline tests
+        # supply a canned plan (no HTTP) and a future in-process `services.plan_route(store)` is a
+        # one-line swap.
+        def route_planner() -> dict:
+            return _plan_route_via_ops_api(settings.ops_api_url)
 
-    def route(state: OrchestratorState) -> Command[Literal["analytics", "marketing", "clarify"]]:
+    def route(
+        state: OrchestratorState,
+    ) -> Command[Literal["analytics", "marketing", "routing", "clarify"]]:
         classifier = router_model.with_structured_output(RouteDecision)
         decision: RouteDecision = classifier.invoke(
             [SystemMessage(content=ROUTER_INSTRUCTIONS), *state["messages"]]
@@ -187,9 +231,52 @@ def build_orchestrator(
             f"\"{brief['hook']}\". {len(brief['shots'])} shots, ~{brief['target_duration_s']:.0f}s, "
             f"CTA: {brief['cta']}. Render: {result.get('render_result', {}).get('status')}."
         )
-        return {
-            "messages": [AIMessage(content=summary, additional_kwargs={"video_brief": brief})]
-        }
+        final = AIMessage(content=summary)
+        # Generative UI: the finished workflow's artifacts as cards on the same channel the
+        # analytics dashboard uses (push_ui_message → LoadExternalComponent), instead of the old
+        # additional_kwargs brief. The brief is the headline; storyboard / script-timeline /
+        # critique are the supporting detail (the storyboard + the evaluator verdict aren't in the
+        # brief card). All anchored to this message via message_id.
+        push_ui_message("video_brief", {"brief": brief}, message=final)
+        if result.get("shots"):
+            push_ui_message(
+                "marketing_storyboard",
+                {"shots": result["shots"], "shot_prompts": result.get("shot_prompts") or []},
+                message=final,
+            )
+        if brief.get("script_beats"):
+            push_ui_message(
+                "marketing_script_timeline", {"script_beats": brief["script_beats"]}, message=final
+            )
+        if result.get("critique"):
+            push_ui_message("marketing_critique", result["critique"], message=final)
+        return {"messages": [final]}
+
+    def routing(state: OrchestratorState) -> dict:
+        # Plan today's delivery route and render it as a generative-UI map card — same push_ui_message
+        # channel as the analytics dashboard. Best-effort: if the ops service is unreachable, reply in
+        # text rather than crash the turn (generative UI is a nicety, never load-bearing).
+        try:
+            plan = route_planner()
+        except Exception as exc:  # noqa: BLE001 — ops API down → text reply, no card
+            log.info("routing.skipped", error=str(exc))
+            return {
+                "messages": [
+                    AIMessage(
+                        content="I couldn't reach the operations service to plan a route — is the "
+                        "ops API running?"
+                    )
+                ]
+            }
+        summary = (
+            f"Planned a delivery route for {plan['vehicle']}: {len(plan['ordered_stops'])} stops, "
+            f"{plan['total_km']:.1f} km (vs {plan['naive_km']:.1f} km unoptimized — "
+            f"{plan['improvement_pct']:.0f}% shorter), ~{plan['est_minutes']:.0f} min."
+        )
+        log.info("routing.planned", stops=len(plan["ordered_stops"]), total_km=plan["total_km"])
+        final = AIMessage(content=summary)
+        push_ui_message("route_map", plan, message=final)
+        return {"messages": [final]}
 
     def clarify(state: OrchestratorState) -> dict:
         return {
@@ -213,12 +300,16 @@ def build_orchestrator(
     # a structured brief, not a token-streamed reply), and invoking the subgraph with `config` is
     # what lets a HITL interrupt() deep inside it bubble up and pause the whole orchestrator.
     builder.add_node("marketing", marketing)
+    # Routing: a deterministic ops capability (no LLM) — plans the delivery route via the ops API and
+    # pushes a route_map generative-UI card.
+    builder.add_node("routing", routing)
     builder.add_node("clarify", clarify)
     builder.add_edge(START, "route")
     # route dispatches via Command(goto=...); analytics flows through its dashboard, then each ends.
     builder.add_edge("analytics", "analytics_dashboard")
     builder.add_edge("analytics_dashboard", END)
     builder.add_edge("marketing", END)
+    builder.add_edge("routing", END)
     builder.add_edge("clarify", END)
 
     return builder.compile(checkpointer=checkpointer, store=store)

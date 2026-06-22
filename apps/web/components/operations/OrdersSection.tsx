@@ -4,9 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
   Sheet,
@@ -16,21 +14,37 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { StatusPill } from "@/components/ui/status-pill";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { ops } from "@/lib/ops";
-import { formatLkr, LOCAL_CITIES, type Order, type StockRow } from "@/lib/ops-types";
+import { formatRupees, LOCAL_CITIES, type Order, type StockRow } from "@/lib/ops-types";
+import { cn } from "@/lib/utils";
+import { OrderDrawer } from "./OrderDrawer";
+import { orderStatusLabel, orderStatusTone } from "./order-status";
 
 const selectClass =
-  "h-8 rounded-2xl border border-border bg-background px-3 text-sm focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 outline-none";
+  "h-9 rounded-[8px] border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30";
 
 type Line = { sku: string; quantity: string };
+type Filter = "all" | "pending" | "dispatched";
 
-const statusVariant = (status: string) =>
-  status === "dispatched" ? "secondary" : status === "cancelled" ? "destructive" : "default";
+// "Packed" is omitted — the backend only has reserved → dispatched, so a Packed filter would never
+// match. Filtering "pending" maps to the backend's "reserved" state.
+const FILTERS: { key: Filter; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "pending", label: "Pending" },
+  { key: "dispatched", label: "Dispatched" },
+];
+
+const ROW = "grid grid-cols-[0.8fr_1.5fr_1fr_1fr] items-center";
 
 export function OrdersSection() {
+  const isMobile = useIsMobile();
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<StockRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<Filter>("all");
+  const [selectedId, setSelectedId] = useState<number | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -52,8 +66,6 @@ export function OrdersSection() {
     }
   }, []);
 
-  // Load once on mount (setState inside the promise callback, not synchronously). `load` is kept
-  // for refreshing after a mutation.
   useEffect(() => {
     Promise.all([ops.listOrders(), ops.getStock()])
       .then(([o, p]) => {
@@ -91,7 +103,7 @@ export function OrdersSection() {
         lines: parsedLines,
         delivery: withDelivery && address ? { address, city } : undefined,
       });
-      toast.success(`Order #${order.order_id} reserved · ${formatLkr(order.total_lkr)}`);
+      toast.success(`Order #${order.order_id} reserved · ${formatRupees(order.total_lkr)}`);
       setOpen(false);
       resetForm();
       await load();
@@ -103,58 +115,108 @@ export function OrdersSection() {
     }
   };
 
+  const visible = orders.filter((o) =>
+    filter === "all" ? true : filter === "pending" ? o.status === "reserved" : o.status === filter,
+  );
+  const selected = orders.find((o) => o.order_id === selectedId) ?? null;
+
+  // "Mark packed" has no backend op (orders go reserved → dispatched), so it's a demo stub.
+  const markPacked = () => {
+    if (selected) toast.success(`Order #${selected.order_id} marked packed (demo)`);
+  };
+
   return (
-    <Card className="gap-4">
-      <CardHeader>
-        <CardTitle className="flex items-center justify-between text-base">
-          <span>Orders</span>
-          <Button size="xs" onClick={() => setOpen(true)}>
+    <div className="flex min-h-0 flex-1">
+      {/* list */}
+      <div className="flex min-w-0 flex-1 flex-col border-r">
+        <div className="flex shrink-0 items-center gap-2.5 px-[26px] pt-[18px] pb-3">
+          {FILTERS.map((f) => (
+            <button
+              key={f.key}
+              onClick={() => setFilter(f.key)}
+              className={cn(
+                "rounded-full px-3.5 py-1.5 text-[12.5px] font-medium transition-colors",
+                filter === f.key
+                  ? "bg-ink text-ink-foreground"
+                  : "border bg-card text-foreground hover:border-brand-edge",
+              )}
+            >
+              {f.label}
+            </button>
+          ))}
+          <Button className="ml-auto h-9 rounded-[8px] text-[12.5px]" onClick={() => setOpen(true)}>
             <Plus /> New order
           </Button>
-        </CardTitle>
-      </CardHeader>
+        </div>
 
-      <CardContent>
-        {loading ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">Loading orders…</p>
-        ) : orders.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">
-            No orders yet. Create one to reserve stock.
-          </p>
-        ) : (
-          <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full border-collapse text-sm">
-              <thead className="bg-muted/50">
-                <tr>
-                  <th className="border-b px-3 py-2 text-left font-medium">Order</th>
-                  <th className="border-b px-3 py-2 text-left font-medium">Customer</th>
-                  <th className="border-b px-3 py-2 text-left font-medium">Items</th>
-                  <th className="border-b px-3 py-2 text-right font-medium">Total</th>
-                  <th className="border-b px-3 py-2 text-left font-medium">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orders.map((o) => (
-                  <tr key={o.order_id} className="hover:bg-muted/30">
-                    <td className="border-b px-3 py-2 tabular-nums">#{o.order_id}</td>
-                    <td className="border-b px-3 py-2">{o.customer_name}</td>
-                    <td className="border-b px-3 py-2 text-muted-foreground">
-                      {o.items.map((it) => `${it.quantity}× ${it.sku}`).join(", ")}
-                    </td>
-                    <td className="border-b px-3 py-2 text-right tabular-nums">
-                      {formatLkr(o.total_lkr)}
-                    </td>
-                    <td className="border-b px-3 py-2">
-                      <Badge variant={statusVariant(o.status)}>{o.status}</Badge>
-                    </td>
-                  </tr>
+        <div className="min-h-0 flex-1 overflow-y-auto px-[26px] pb-[22px]">
+          <div className="overflow-hidden rounded-[14px] border bg-card">
+            <div className={cn(ROW, "border-b bg-panel")}>
+              <HeadCell>Order</HeadCell>
+              <HeadCell>Customer</HeadCell>
+              <HeadCell>Status</HeadCell>
+              <HeadCell className="text-right">Total</HeadCell>
+            </div>
+            {loading ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">Loading orders…</p>
+            ) : visible.length === 0 ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">No orders here yet.</p>
+            ) : (
+              <div className="divide-y divide-border-soft">
+                {visible.map((o) => (
+                  <button
+                    key={o.order_id}
+                    onClick={() => setSelectedId(o.order_id)}
+                    className={cn(
+                      ROW,
+                      "w-full text-left transition-colors hover:bg-accent",
+                      o.order_id === selectedId && "bg-accent",
+                    )}
+                  >
+                    <div className="px-4 py-[13px] font-mono text-[12.5px] tabular-nums">
+                      #{o.order_id}
+                    </div>
+                    <div className="px-4 py-[13px] text-[13px]">{o.customer_name}</div>
+                    <div className="px-4 py-[13px]">
+                      <StatusPill tone={orderStatusTone(o.status)} className="text-[10px]">
+                        {orderStatusLabel(o.status)}
+                      </StatusPill>
+                    </div>
+                    <div className="px-4 py-[13px] text-right font-mono text-[12.5px] tabular-nums">
+                      {formatRupees(o.total_lkr)}
+                    </div>
+                  </button>
                 ))}
-              </tbody>
-            </table>
+              </div>
+            )}
           </div>
-        )}
-      </CardContent>
+        </div>
+      </div>
 
+      {/* detail drawer — inline on desktop */}
+      {selected && !isMobile && (
+        <div className="w-[316px] shrink-0 overflow-y-auto bg-background">
+          <OrderDrawer order={selected} onMarkPacked={markPacked} />
+        </div>
+      )}
+
+      {/* detail drawer — Sheet on mobile */}
+      <Sheet
+        open={isMobile && !!selected}
+        onOpenChange={(o) => {
+          if (!o) setSelectedId(null);
+        }}
+      >
+        <SheetContent className="w-[330px] p-0 sm:max-w-none">
+          <SheetHeader className="sr-only">
+            <SheetTitle>Order detail</SheetTitle>
+            <SheetDescription>Selected order line items and actions.</SheetDescription>
+          </SheetHeader>
+          {selected && <OrderDrawer order={selected} onMarkPacked={markPacked} />}
+        </SheetContent>
+      </Sheet>
+
+      {/* new order Sheet */}
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent className="overflow-y-auto">
           <SheetHeader>
@@ -183,7 +245,9 @@ export function OrdersSection() {
                     className={`${selectClass} flex-1`}
                     value={line.sku}
                     onChange={(e) =>
-                      setLines((ls) => ls.map((l, j) => (j === i ? { ...l, sku: e.target.value } : l)))
+                      setLines((ls) =>
+                        ls.map((l, j) => (j === i ? { ...l, sku: e.target.value } : l)),
+                      )
                     }
                   >
                     <option value="">Select product…</option>
@@ -267,6 +331,19 @@ export function OrdersSection() {
           </SheetFooter>
         </SheetContent>
       </Sheet>
-    </Card>
+    </div>
+  );
+}
+
+function HeadCell({ children, className }: { children: React.ReactNode; className?: string }) {
+  return (
+    <div
+      className={cn(
+        "px-4 py-[11px] font-mono text-[9.5px] tracking-[0.06em] text-muted-foreground uppercase",
+        className,
+      )}
+    >
+      {children}
+    </div>
   );
 }

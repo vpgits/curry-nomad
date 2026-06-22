@@ -1,38 +1,73 @@
 "use client";
 
 import { useState, type ComponentProps, type ReactNode } from "react";
-import {
-  Brain,
-  ChefHat,
-  Check,
-  ChevronRight,
-  Copy,
-  Database,
-  RefreshCw,
-  Table2,
-} from "lucide-react";
+import { Brain, Check, ChevronRight, Copy, Database, RefreshCw, Table2 } from "lucide-react";
 import type { Message } from "@langchain/langgraph-sdk";
 
 import { LoadExternalComponent } from "@langchain/langgraph-sdk/react-ui";
 
 import { AnalyticsDashboard } from "@/components/AnalyticsDashboard";
+import { CritiqueCard } from "@/components/CritiqueCard";
+import { RouteMapCard } from "@/components/operations/RouteMapCard";
+import { ScriptTimeline } from "@/components/ScriptTimeline";
+import { StoryboardFilmstrip } from "@/components/StoryboardFilmstrip";
 import { VideoBriefCard } from "@/components/VideoBriefCard";
-import { cn, getContentString, getNoraKwargs, getReasoningString } from "@/lib/utils";
+import { cn, getContentString, getReasoningString } from "@/lib/utils";
 import { useStreamContext } from "@/providers/Stream";
 import { MarkdownText } from "../markdown";
 import { BranchSwitcher } from "./shared";
 
 // Client-side component map for push_ui_message UI messages — LoadExternalComponent renders these
-// directly (no remote bundle fetch, which the local dev server can't serve anyway).
-const UI_COMPONENTS = { analytics_dashboard: AnalyticsDashboard };
+// directly (no remote bundle fetch, which the local dev server can't serve anyway). Both the
+// analytics path and the marketing path now push onto this one channel (the marketing brief used
+// to ride additional_kwargs); each ui.name keys into this map.
+const UI_COMPONENTS = {
+  analytics_dashboard: AnalyticsDashboard,
+  video_brief: VideoBriefCard,
+  marketing_storyboard: StoryboardFilmstrip,
+  marketing_script_timeline: ScriptTimeline,
+  marketing_critique: CritiqueCard,
+  route_map: RouteMapCard,
+};
+// ui.name values that mark a turn as the marketing workflow (drives the ModeChip).
+const MARKETING_UI = new Set([
+  "video_brief",
+  "marketing_storyboard",
+  "marketing_script_timeline",
+  "marketing_critique",
+]);
 
 type ToolCall = { name: string; args: Record<string, unknown>; id?: string };
 
 export function NoraAvatar() {
   return (
-    <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground">
-      <ChefHat className="size-4" />
+    <div className="flex size-[30px] shrink-0 items-center justify-center rounded-lg bg-ink font-mono text-[13px] font-semibold text-ink-foreground">
+      N
     </div>
+  );
+}
+
+type TurnMode = "analytics" | "marketing" | "routing";
+
+// The mode chip beside "Nora": ink pill for the analytics agent, accent-tint pill for the marketing
+// workflow, info-tint for the deterministic routing capability — the paradigms explicit at a glance.
+function ModeChip({ mode }: { mode: TurnMode }) {
+  if (mode === "marketing")
+    return (
+      <span className="rounded-full border border-brand-edge bg-brand-tint px-2 py-px text-[9.5px] font-semibold text-brand-text">
+        Marketing workflow
+      </span>
+    );
+  if (mode === "routing")
+    return (
+      <span className="rounded-full border border-info-edge bg-info-tint px-2 py-px text-[9.5px] font-semibold text-info-text">
+        Operations
+      </span>
+    );
+  return (
+    <span className="rounded-full bg-ink px-2 py-px text-[9.5px] font-semibold text-ink-foreground">
+      Analytics agent
+    </span>
   );
 }
 
@@ -59,7 +94,6 @@ export function AssistantMessage({
 
   const text = getContentString(message.content);
   const reasoning = getReasoningString(message);
-  const { video_brief: brief } = getNoraKwargs(message);
   const toolCalls = (message as { tool_calls?: ToolCall[] }).tool_calls ?? [];
   // The reasoning chain is still "thinking" while this is the latest message, the turn is running,
   // and nothing's resolved on it yet (no answer text, no tool decision). Once text or tool calls
@@ -73,10 +107,18 @@ export function AssistantMessage({
       ? stream.messages.find((m) => (m as { tool_call_id?: string }).tool_call_id === id)
       : undefined;
 
-  // push_ui_message UI messages tagged to this AI message (the generative-UI dashboard).
+  // push_ui_message UI messages tagged to this AI message (analytics dashboard, or the marketing
+  // brief + storyboard/script/critique cards).
   const uiForMessage = (stream.values.ui ?? []).filter(
     (ui) => (ui.metadata as { message_id?: string } | undefined)?.message_id === message.id,
   );
+  // The turn's paradigm, from the cards it pushed — drives the ModeChip. Marketing cards →
+  // marketing; the route_map card → routing; otherwise the analytics agent.
+  const mode: TurnMode = uiForMessage.some((ui) => MARKETING_UI.has(ui.name))
+    ? "marketing"
+    : uiForMessage.some((ui) => ui.name === "route_map")
+      ? "routing"
+      : "analytics";
 
   const [copied, setCopied] = useState(false);
   const copy = () => {
@@ -99,8 +141,9 @@ export function AssistantMessage({
       {continuation ? <AvatarSpacer /> : <NoraAvatar />}
       <div className="min-w-0 flex-1 space-y-2">
         {!continuation && (
-          <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-            Nora
+          <div className="flex items-center gap-2">
+            <span className="text-[13px] font-semibold">Nora</span>
+            <ModeChip mode={mode} />
           </div>
         )}
 
@@ -109,15 +152,17 @@ export function AssistantMessage({
             nothing by default. */}
         {reasoning && <ReasoningStep reasoning={reasoning} running={reasoningRunning} />}
 
-        {text && <MarkdownText>{text}</MarkdownText>}
+        {text && (
+          <div className="rounded-[5px_13px_13px_13px] border bg-card px-[15px] py-[13px] text-[13.5px] leading-[1.55]">
+            <MarkdownText>{text}</MarkdownText>
+          </div>
+        )}
 
         {toolCalls.length > 0 && (
           // One AI message's tool calls = one step. Calls in the same message ran in PARALLEL
           // (ToolNode fires them together); a later message is a SEQUENTIAL step. Thread them.
           <ToolStepGroup calls={toolCalls} resultFor={resultFor} continuation={continuation} />
         )}
-
-        {brief && <VideoBriefCard brief={brief} />}
 
         {uiForMessage.map((ui) => (
           <LoadExternalComponent
@@ -344,7 +389,7 @@ function SqlBlock({ sql }: { sql: string }) {
     <pre className="overflow-x-auto rounded-md bg-muted/40 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words text-foreground/80">
       {tokens.map((tok, i): ReactNode =>
         SQL_KEYWORDS.has(tok.toUpperCase()) ? (
-          <span key={i} className="font-semibold text-sky-400">
+          <span key={i} className="font-semibold text-info">
             {tok}
           </span>
         ) : (

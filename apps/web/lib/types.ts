@@ -6,11 +6,23 @@
 import type { Message } from "@langchain/langgraph-sdk";
 import type { UIMessage } from "@langchain/langgraph-sdk/react-ui";
 
+export interface ConceptIdea {
+  angle: string;
+  hook: string;
+  rationale: string;
+}
+
 export interface ScriptBeat {
   t_start_s: number;
   t_end_s: number;
   voiceover: string;
   on_screen_text?: string | null;
+}
+
+export interface Critique {
+  passed: boolean;
+  issues: string[];
+  suggestions: string[];
 }
 
 export interface Shot {
@@ -53,10 +65,10 @@ export interface ToolTraceStep {
   calls: ToolCallTrace[];
 }
 
-// The custom payload the orchestrator stashes on its final AI message.
+// The custom payload the orchestrator stashes on its final AI message. (The marketing brief used
+// to live here as `video_brief`; it now rides the generative-UI channel via push_ui_message.)
 export interface NoraAdditionalKwargs {
   tool_trace?: ToolTraceStep[];
-  video_brief?: VideoBrief;
   // Fallback chain-of-thought location: Anthropic surfaces reasoning as `thinking` content blocks
   // (handled in getReasoningString), but some providers (e.g. DeepSeek) stash it here instead.
   reasoning_content?: string;
@@ -64,6 +76,7 @@ export interface NoraAdditionalKwargs {
 
 // Payload emitted by the marketing human_review node's interrupt().
 export interface ReviewInterrupt {
+  kind?: "script_review";
   question: string;
   script_beats: ScriptBeat[];
 }
@@ -73,6 +86,16 @@ export interface ReviewDecision {
   approved: boolean;
   edited_script?: ScriptBeat[];
 }
+
+// Payload emitted by the marketing choose_concept node's interrupt (the concept-pick gate).
+export interface ConceptPickInterrupt {
+  kind: "concept_pick";
+  question: string;
+  concepts: ConceptIdea[];
+}
+
+// Either marketing interrupt — distinguished by `kind` (concept_pick has no script_beats).
+export type MarketingInterrupt = ReviewInterrupt | ConceptPickInterrupt;
 
 // The analytics generative-UI dashboard (mirrors AnalyticsDashboard in schemas.py). Rendered by
 // the useStream UI via LoadExternalComponent.
@@ -87,10 +110,49 @@ export interface DashboardTable {
   rows: string[][];
 }
 
+export interface ChartPoint {
+  label: string;
+  value: number;
+}
+
+// The chart the analytics builder model chose for this answer (mirrors DashboardChart in
+// schemas.py). `kind: "none"` (or an empty series) renders no chart.
+export interface DashboardChart {
+  kind: "bar" | "line" | "pie" | "none";
+  x_label?: string | null;
+  y_label?: string | null;
+  series: ChartPoint[];
+}
+
 export interface AnalyticsDashboardData {
   title: string;
   stats: DashboardStat[];
   table?: DashboardTable | null;
+  chart?: DashboardChart | null;
+}
+
+// The LLM-authored A2UI surface (mirrors A2uiSurface in schemas.py): an ordered list of catalog
+// blocks the model composes per query. Rendered on /studio by A2uiSurfaceView. One flat block
+// shape (not a discriminated union) — `type` selects which fields are populated — matching the
+// backend (which flattens to dodge OpenAI strict structured-output's union limits).
+export interface A2uiMetric {
+  label: string;
+  value: string;
+  trend?: "up" | "down" | "neutral" | null;
+  trend_value?: string | null;
+}
+export interface A2uiBlock {
+  type: "heading" | "text" | "metrics" | "chart" | "table";
+  text?: string | null; // heading / text
+  metrics?: A2uiMetric[] | null; // metrics
+  title?: string | null; // chart
+  chart_kind?: "bar" | "line" | "pie" | null; // chart
+  series?: ChartPoint[] | null; // chart
+  columns?: string[] | null; // table
+  rows?: string[][] | null; // table
+}
+export interface A2uiSurface {
+  blocks: A2uiBlock[];
 }
 
 // Orchestrator graph state surfaced by useStream. Must be a `type` (not an interface) so it

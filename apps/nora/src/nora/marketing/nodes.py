@@ -133,12 +133,48 @@ def make_ideate(model, settings: Settings):
     return ideate
 
 
-def make_choose_concept(settings: Settings):
-    """Pick the lead concept. We take the first (angle seed 0); a structured judge could rank
-    them instead — but the brand-voice judging happens later in `critique`."""
+def make_choose_concept(settings: Settings, *, auto_choose: bool = True):
+    """Pick the lead concept from the parallel ideation.
+
+    `auto_choose=True` (the default — and what every unattended run uses: evals, the offline
+    tests) takes the first concept (angle seed 0), preserving the original behaviour. The
+    orchestrator opts into `auto_choose=False` to turn this into a *second* HITL gate: an
+    `interrupt()` that hands the N concepts to the operator and resumes with the one they pick —
+    the interactive-selection generative-UI pattern (the parallel fan-out finally becomes a real
+    choice). The payload carries `kind: "concept_pick"` so the UI can tell it apart from the
+    later script-review interrupt.
+    """
 
     def choose_concept(state) -> dict:
-        return {"chosen_concept": state["concepts"][0]}
+        concepts = state["concepts"]
+        if auto_choose or len(concepts) <= 1:
+            return {"chosen_concept": concepts[0]}
+
+        log.info("hitl.raised", question="choose concept")
+        decision = interrupt(
+            {
+                "kind": "concept_pick",
+                "question": "Which creative concept should we develop?",
+                "concepts": concepts,  # list of ConceptIdea dicts (JSON-native state)
+            }
+        )
+        # Resume normalization (mirrors human_review): useStream resumes with a structured
+        # Command(resume={"chosen_index": n}) → dict; a JSON string is parsed; a bare int works too.
+        if isinstance(decision, str):
+            try:
+                decision = json.loads(decision)
+            except (ValueError, TypeError):
+                pass
+        if isinstance(decision, dict):
+            idx = decision.get("chosen_index", 0)
+        elif isinstance(decision, int):
+            idx = decision
+        else:
+            idx = 0
+        if not isinstance(idx, int) or not (0 <= idx < len(concepts)):
+            idx = 0
+        log.info("marketing.concept_chosen", index=idx)
+        return {"chosen_concept": concepts[idx]}
 
     return choose_concept
 
@@ -171,6 +207,7 @@ def make_human_review(settings: Settings, *, auto_approve: bool = False):
         log.info("hitl.raised", question="approve script")
         decision = interrupt(
             {
+                "kind": "script_review",  # lets the UI distinguish this from the concept_pick gate
                 "question": "Approve this ~30s script before we generate the storyboard and "
                 "shot prompts?",
                 "script_beats": state["script_beats"],  # already dicts (JSON-native state)

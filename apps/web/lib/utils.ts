@@ -19,7 +19,8 @@ export function getContentString(content: Message["content"]): string {
     .join("");
 }
 
-// The orchestrator stashes tool_trace / video_brief on its final message's additional_kwargs.
+// The orchestrator stashes its custom keys (reasoning_content, tool_trace) on the final message's
+// additional_kwargs. (The marketing brief moved to the generative-UI channel; see NoraAdditionalKwargs.)
 export function getNoraKwargs(message: Message): NoraAdditionalKwargs {
   return (message as { additional_kwargs?: NoraAdditionalKwargs }).additional_kwargs ?? {};
 }

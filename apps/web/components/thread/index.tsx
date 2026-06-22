@@ -1,15 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, ChefHat, Square } from "lucide-react";
+import Link from "next/link";
+import { useQueryState } from "nuqs";
+import { ArrowDown, ArrowUp, Square } from "lucide-react";
 import type { Message } from "@langchain/langgraph-sdk";
 
 import { AppShell } from "@/components/app-shell";
-import { ApprovalCard } from "@/components/ApprovalCard";
+import { ConceptPicker } from "@/components/ConceptPicker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { ReviewDecision, ReviewInterrupt } from "@/lib/types";
+import type { MarketingInterrupt } from "@/lib/types";
 import { useStreamContext } from "@/providers/Stream";
+import { AskNoraModeLane } from "./AskNoraModeLane";
 import { AssistantMessage, NoraAvatar } from "./messages/ai";
 import { HumanMessage } from "./messages/human";
 
@@ -21,15 +24,17 @@ const SUGGESTIONS = [
 
 export function Thread() {
   const stream = useStreamContext();
+  const [threadId] = useQueryState("threadId");
   const [input, setInput] = useState("");
 
   const messages = stream.messages.filter((m) => !m.id?.startsWith("do-not-render-"));
-  const interrupt = stream.interrupt?.value as ReviewInterrupt | undefined;
+  const interrupt = stream.interrupt?.value as MarketingInterrupt | undefined;
   const isLoading = stream.isLoading;
   const isEmpty = messages.length === 0 && !isLoading;
 
   // The last turn is human (or empty) → the model hasn't started replying yet → show the dots.
   const lastIsHuman = messages.length > 0 && messages[messages.length - 1].type === "human";
+  const briefsHref = threadId ? `/briefs?threadId=${threadId}` : "/briefs";
 
   const send = (text: string) => {
     const content = text.trim();
@@ -53,37 +58,26 @@ export function Thread() {
     );
   };
 
-  // Resume the paused marketing workflow with the operator's decision (read by human_review).
-  const decide = (decision: ReviewDecision) => {
-    stream.submit(undefined, {
-      command: { resume: decision },
-      streamMode: ["values"],
-      streamSubgraphs: true,
-    });
-  };
-
   return (
     <AppShell
-      title={
-        <>
-          Nora · <span className="text-muted-foreground">Curry Nomad</span>
-        </>
-      }
-      subtitle="One assistant, two paradigms — an analytics agent and a marketing workflow."
+      title="Ask Nora"
+      subtitle="Analytics agent + marketing workflow"
+      hideAsk
     >
+      <AskNoraModeLane />
       <MessageList
         messages={messages}
         isLoading={isLoading}
         lastIsHuman={lastIsHuman}
         interrupt={interrupt}
         isEmpty={isEmpty}
-        onDecide={decide}
+        briefsHref={briefsHref}
         onPick={send}
       />
 
-      <footer className="shrink-0 border-t bg-background/80 backdrop-blur">
+      <footer className="shrink-0 border-t bg-background">
         <form
-          className="mx-auto flex max-w-3xl items-center gap-2 px-4 py-4"
+          className="mx-auto flex max-w-3xl items-center gap-2.5 px-[26px] py-4"
           onSubmit={(e) => {
             e.preventDefault();
             send(input);
@@ -93,7 +87,7 @@ export function Thread() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Ask about the business, or ask for a video ad…"
-            className="h-11 rounded-xl"
+            className="h-12 rounded-[11px] text-[13.5px]"
           />
           {isLoading ? (
             <Button
@@ -101,7 +95,7 @@ export function Thread() {
               size="icon"
               variant="outline"
               onClick={() => stream.stop()}
-              className="size-11 shrink-0 rounded-xl"
+              className="size-12 shrink-0 rounded-[11px]"
               aria-label="Stop"
             >
               <Square className="size-4" />
@@ -111,7 +105,7 @@ export function Thread() {
               type="submit"
               size="icon"
               disabled={!input.trim()}
-              className="size-11 shrink-0 rounded-xl"
+              className="size-12 shrink-0 rounded-[11px]"
               aria-label="Send message"
             >
               <ArrowUp className="size-5" />
@@ -129,15 +123,15 @@ function MessageList({
   lastIsHuman,
   interrupt,
   isEmpty,
-  onDecide,
+  briefsHref,
   onPick,
 }: {
   messages: Message[];
   isLoading: boolean;
   lastIsHuman: boolean;
-  interrupt: ReviewInterrupt | undefined;
+  interrupt: MarketingInterrupt | undefined;
   isEmpty: boolean;
-  onDecide: (decision: ReviewDecision) => void;
+  briefsHref: string;
   onPick: (text: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -164,16 +158,17 @@ function MessageList({
     if (atBottomRef.current) scrollToBottom("smooth");
   }, [messages, interrupt, isLoading]);
 
-  // A new interrupt only resets the ApprovalCard's local edit state when the script truly changes.
-  const interruptKey = interrupt ? JSON.stringify(interrupt.script_beats) : undefined;
-
   return (
-    <div ref={scrollRef} onScroll={onScroll} className="relative min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-3xl px-4 py-6">
+    <div
+      ref={scrollRef}
+      onScroll={onScroll}
+      className="relative min-h-0 flex-1 overflow-y-auto bg-body-bg"
+    >
+      <div className="mx-auto max-w-3xl px-[26px] py-6">
         {isEmpty ? (
           <EmptyState onPick={onPick} />
         ) : (
-          <div className="flex flex-col gap-6">
+          <div className="flex flex-col gap-[18px]">
             {messages.map((message, idx) => {
               const prev = messages[idx - 1];
               // Group consecutive assistant-side rows (the agent's tool steps + final answer) under
@@ -181,11 +176,7 @@ function MessageList({
               const continuation = !!prev && (prev.type === "ai" || prev.type === "tool");
               if (message.type === "human") {
                 return (
-                  <HumanMessage
-                    key={message.id ?? idx}
-                    message={message}
-                    isLoading={isLoading}
-                  />
+                  <HumanMessage key={message.id ?? idx} message={message} isLoading={isLoading} />
                 );
               }
               if (message.type === "ai") {
@@ -203,14 +194,14 @@ function MessageList({
               return null;
             })}
 
-            {interrupt && (
-              <ApprovalCard
-                key={interruptKey}
-                payload={interrupt}
-                disabled={isLoading}
-                onDecision={onDecide}
-              />
-            )}
+            {/* Two HITL gates. The concept-pick gate is an inline interactive selection (resumes
+                right here); the script-review gate hands off to the dedicated /briefs surface. */}
+            {interrupt &&
+              (interrupt.kind === "concept_pick" ? (
+                <ConceptPicker interrupt={interrupt} />
+              ) : (
+                <MarketingProgressCard briefsHref={briefsHref} />
+              ))}
 
             {isLoading && lastIsHuman && <ThinkingIndicator />}
           </div>
@@ -233,11 +224,45 @@ function MessageList({
   );
 }
 
+// The marketing workflow paused for review — a compact progress card that hands off to /briefs.
+function MarketingProgressCard({ briefsHref }: { briefsHref: string }) {
+  return (
+    <div className="flex items-start gap-3">
+      <NoraAvatar />
+      <div className="min-w-0 flex-1 space-y-2">
+        <div className="flex items-center gap-2">
+          <span className="text-[13px] font-semibold">Nora</span>
+          <span className="rounded-full border border-brand-edge bg-brand-tint px-2 py-px text-[9.5px] font-semibold text-brand-text">
+            Marketing workflow
+          </span>
+        </div>
+        <div className="rounded-[5px_13px_13px_13px] border border-brand-edge bg-brand-tint/30 px-[15px] py-3.5">
+          <div className="mb-2.5 text-[12.5px] text-muted-foreground">
+            Concept → script → <b className="text-brand-text">your review</b> → storyboard → prompts
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-brand-edge/50">
+            <div className="h-full w-[52%] bg-brand" />
+          </div>
+          <div className="mt-3 text-[13.5px] font-medium">
+            Script is ready — paused for your approval before I spend compute on the storyboard.
+          </div>
+          <Link
+            href={briefsHref}
+            className="mt-2.5 inline-block rounded-[8px] bg-ink px-[15px] py-2 text-[12.5px] font-medium text-ink-foreground"
+          >
+            Open review →
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EmptyState({ onPick }: { onPick: (text: string) => void }) {
   return (
     <div className="flex flex-col items-center gap-6 py-16 text-center">
-      <div className="flex size-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
-        <ChefHat className="size-7" />
+      <div className="flex size-14 items-center justify-center rounded-2xl bg-ink font-mono text-2xl font-semibold text-ink-foreground">
+        N
       </div>
       <div className="space-y-1.5">
         <h2 className="text-xl font-semibold">How can Nora help?</h2>
@@ -248,7 +273,13 @@ function EmptyState({ onPick }: { onPick: (text: string) => void }) {
       </div>
       <div className="flex flex-wrap justify-center gap-2">
         {SUGGESTIONS.map((s) => (
-          <Button key={s} variant="outline" size="sm" className="rounded-full" onClick={() => onPick(s)}>
+          <Button
+            key={s}
+            variant="outline"
+            size="sm"
+            className="rounded-full"
+            onClick={() => onPick(s)}
+          >
             {s}
           </Button>
         ))}

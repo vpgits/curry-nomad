@@ -1,13 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { PackagePlus, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { KpiCard } from "@/components/ui/kpi-card";
 import {
   Sheet,
   SheetContent,
@@ -16,17 +14,21 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { StatusPill } from "@/components/ui/status-pill";
 import { Textarea } from "@/components/ui/textarea";
 import { ops } from "@/lib/ops";
-import type { StockRow } from "@/lib/ops-types";
+import { formatRupees, formatRupeesShort, type StockRow } from "@/lib/ops-types";
+import { cn } from "@/lib/utils";
 
 type SheetState = { open: boolean; mode: "receive" | "adjust"; product: StockRow | null };
 
 const CLOSED: SheetState = { open: false, mode: "receive", product: null };
+const ROW = "grid grid-cols-[2.2fr_1fr_1fr_1fr_1.3fr] items-center";
 
 export function StockSection() {
   const [rows, setRows] = useState<StockRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
   const [sheet, setSheet] = useState<SheetState>(CLOSED);
   const [qty, setQty] = useState("");
   const [reason, setReason] = useState("");
@@ -42,8 +44,6 @@ export function StockSection() {
     }
   }, []);
 
-  // Load once on mount via a promise chain (setState in a callback, not synchronously in the
-  // effect body) — the pattern the rest of the app uses. `load` itself is for handler-driven refreshes.
   useEffect(() => {
     ops
       .getStock()
@@ -52,10 +52,10 @@ export function StockSection() {
       .finally(() => setLoading(false));
   }, []);
 
-  const openSheet = (mode: SheetState["mode"], product: StockRow) => {
+  const openSheet = (mode: SheetState["mode"], product: StockRow | null) => {
     setQty("");
     setReason("");
-    setSheet({ open: true, mode, product });
+    setSheet({ open: true, mode, product: product ?? rows[0] ?? null });
   };
 
   const submit = async () => {
@@ -68,7 +68,11 @@ export function StockSection() {
     setBusy(true);
     try {
       if (sheet.mode === "receive") {
-        await ops.receiveStock({ product_id: sheet.product.product_id, qty: n, reason: reason || undefined });
+        await ops.receiveStock({
+          product_id: sheet.product.product_id,
+          qty: n,
+          reason: reason || undefined,
+        });
         toast.success(`Received ${n} × ${sheet.product.sku}`);
       } else {
         await ops.adjustStock({
@@ -90,67 +94,95 @@ export function StockSection() {
   };
 
   const lowCount = rows.filter((r) => r.low_stock).length;
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? rows.filter((r) => r.name.toLowerCase().includes(q) || r.sku.toLowerCase().includes(q))
+    : rows;
+  // On-hand value isn't in the ops contract (StockRow has no unit cost), so it's a prototype figure.
+  const onHandValue = 842_000;
+  const restockEstimate = 96_000;
 
   return (
-    <Card className="gap-4">
-      <CardHeader>
-        <CardTitle className="flex items-center justify-between text-base">
-          <span>Stock</span>
-          {lowCount > 0 && (
-            <Badge variant="destructive">{lowCount} below reorder point</Badge>
-          )}
-        </CardTitle>
-      </CardHeader>
+    <>
+      {/* action row */}
+      <div className="flex items-center gap-3">
+        {lowCount > 0 && (
+          <StatusPill tone="danger">{lowCount} below reorder point</StatusPill>
+        )}
+        <div className="ml-auto flex items-center gap-2.5">
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search…"
+            className="h-9 w-44 rounded-[8px] bg-card text-[12.5px]"
+          />
+          <Button
+            className="h-9 rounded-[8px] text-[12.5px]"
+            onClick={() => openSheet("receive", null)}
+          >
+            + Receive stock
+          </Button>
+        </div>
+      </div>
 
-      <CardContent>
+      {/* KPI strip */}
+      <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">
+        <KpiCard label="On-hand value" value={formatRupees(onHandValue)} />
+        <KpiCard label="Active SKUs" value={rows.length || "—"} />
+        <KpiCard
+          label="Reorder now"
+          value={`${lowCount} SKUs`}
+          tone="danger"
+          sub={`≈ ${formatRupeesShort(restockEstimate)} to restock`}
+        />
+      </div>
+
+      {/* table */}
+      <div className="overflow-hidden rounded-[14px] border bg-card">
+        <div className={cn(ROW, "border-b bg-panel")}>
+          <HeadCell>Product</HeadCell>
+          <HeadCell className="text-right">On hand</HeadCell>
+          <HeadCell className="text-right">Reserved</HeadCell>
+          <HeadCell className="text-right">Available</HeadCell>
+          <HeadCell className="text-right">Actions</HeadCell>
+        </div>
         {loading ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">Loading stock…</p>
+          <p className="py-8 text-center text-sm text-muted-foreground">Loading stock…</p>
+        ) : filtered.length === 0 ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">No matching products.</p>
         ) : (
-          <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full border-collapse text-sm">
-              <thead className="bg-muted/50">
-                <tr>
-                  <th className="border-b px-3 py-2 text-left font-medium">Product</th>
-                  <th className="border-b px-3 py-2 text-right font-medium">On hand</th>
-                  <th className="border-b px-3 py-2 text-right font-medium">Reserved</th>
-                  <th className="border-b px-3 py-2 text-right font-medium">Available</th>
-                  <th className="border-b px-3 py-2 text-right font-medium">Reorder pt</th>
-                  <th className="border-b px-3 py-2 text-right font-medium">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.product_id} className="hover:bg-muted/30">
-                    <td className="border-b px-3 py-2">
-                      <div className="flex items-center gap-2">
-                        <span>{r.name}</span>
-                        {r.low_stock && <Badge variant="destructive">low</Badge>}
-                      </div>
-                      <div className="text-xs text-muted-foreground">{r.sku}</div>
-                    </td>
-                    <td className="border-b px-3 py-2 text-right tabular-nums">{r.on_hand}</td>
-                    <td className="border-b px-3 py-2 text-right tabular-nums">{r.reserved}</td>
-                    <td className="border-b px-3 py-2 text-right tabular-nums">{r.available}</td>
-                    <td className="border-b px-3 py-2 text-right tabular-nums text-muted-foreground">
-                      {r.reorder_point}
-                    </td>
-                    <td className="border-b px-3 py-2">
-                      <div className="flex justify-end gap-1.5">
-                        <Button size="xs" variant="outline" onClick={() => openSheet("receive", r)}>
-                          <PackagePlus /> Receive
-                        </Button>
-                        <Button size="xs" variant="ghost" onClick={() => openSheet("adjust", r)}>
-                          <SlidersHorizontal /> Adjust
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="divide-y divide-border-soft">
+            {filtered.map((r) => (
+              <div key={r.product_id} className={cn(ROW, r.low_stock && "bg-danger-tint/30")}>
+                <div className="px-4 py-[13px]">
+                  <div className="flex items-center gap-2 text-[13px]">
+                    {r.name}
+                    {r.low_stock && (
+                      <StatusPill tone="danger" className="px-1.5 py-0 text-[9.5px]">
+                        low
+                      </StatusPill>
+                    )}
+                  </div>
+                  <div className="font-mono text-[10px] text-muted-foreground">{r.sku}</div>
+                </div>
+                <NumCell>{r.on_hand}</NumCell>
+                <NumCell>{r.reserved}</NumCell>
+                <NumCell className={cn(r.low_stock && "font-medium text-danger-text")}>
+                  {r.available}
+                </NumCell>
+                <div className="flex justify-end gap-1 px-3 py-[13px]">
+                  <Button size="xs" variant="ghost" onClick={() => openSheet("receive", r)}>
+                    Receive
+                  </Button>
+                  <Button size="xs" variant="ghost" onClick={() => openSheet("adjust", r)}>
+                    Adjust
+                  </Button>
+                </div>
+              </div>
+            ))}
           </div>
         )}
-      </CardContent>
+      </div>
 
       <Sheet open={sheet.open} onOpenChange={(o) => setSheet((s) => ({ ...s, open: o }))}>
         <SheetContent>
@@ -168,6 +200,25 @@ export function StockSection() {
 
           <div className="flex flex-col gap-4 px-6">
             <label className="flex flex-col gap-1.5 text-sm">
+              <span className="font-medium">Product</span>
+              <select
+                className="h-9 rounded-[8px] border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
+                value={sheet.product?.product_id ?? ""}
+                onChange={(e) =>
+                  setSheet((s) => ({
+                    ...s,
+                    product: rows.find((r) => r.product_id === Number(e.target.value)) ?? null,
+                  }))
+                }
+              >
+                {rows.map((r) => (
+                  <option key={r.product_id} value={r.product_id}>
+                    {r.name} ({r.sku})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1.5 text-sm">
               <span className="font-medium">
                 {sheet.mode === "receive" ? "Quantity received" : "Quantity change (±)"}
               </span>
@@ -180,7 +231,10 @@ export function StockSection() {
             </label>
             <label className="flex flex-col gap-1.5 text-sm">
               <span className="font-medium">
-                Reason {sheet.mode === "adjust" && <span className="text-muted-foreground">(required for write-offs)</span>}
+                Reason{" "}
+                {sheet.mode === "adjust" && (
+                  <span className="text-muted-foreground">(required for write-offs)</span>
+                )}
               </span>
               <Textarea
                 value={reason}
@@ -198,6 +252,27 @@ export function StockSection() {
           </SheetFooter>
         </SheetContent>
       </Sheet>
-    </Card>
+    </>
+  );
+}
+
+function HeadCell({ children, className }: { children: React.ReactNode; className?: string }) {
+  return (
+    <div
+      className={cn(
+        "px-4 py-[11px] font-mono text-[9.5px] tracking-[0.06em] text-muted-foreground uppercase",
+        className,
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+function NumCell({ children, className }: { children: React.ReactNode; className?: string }) {
+  return (
+    <div className={cn("px-4 py-[13px] text-right font-mono text-[13px] tabular-nums", className)}>
+      {children}
+    </div>
   );
 }

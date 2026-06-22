@@ -84,3 +84,17 @@ export const LOCAL_CITIES = [
 export function formatLkr(amount: number): string {
   return new Intl.NumberFormat("en-LK", { maximumFractionDigits: 0 }).format(amount) + " LKR";
 }
+
+// "₨ 4,250" — the redesign's rupee format (₨ prefix, no decimals). formatLkr (suffix " LKR") is
+// kept for the operations console's toasts.
+export function formatRupees(amount: number): string {
+  return "₨ " + new Intl.NumberFormat("en-LK", { maximumFractionDigits: 0 }).format(amount);
+}
+
+// "₨ 1.28M" / "₨ 96k" — compact form for KPI hero numbers.
+export function formatRupeesShort(amount: number): string {
+  const abs = Math.abs(amount);
+  if (abs >= 1_000_000) return "₨ " + (amount / 1_000_000).toFixed(2).replace(/\.?0+$/, "") + "M";
+  if (abs >= 1_000) return "₨ " + Math.round(amount / 1_000) + "k";
+  return "₨ " + amount;
+}
