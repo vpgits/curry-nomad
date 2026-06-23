@@ -45,6 +45,16 @@ operations = [
 aegra = [
     "aegra-cli>=0.9.22",
 ]
+# The optional `workspace` capability (M-Workspace): an agent that acts on the operator's own Google
+# account (Gmail/Calendar) through the self-hosted Google Workspace MCP server. OFF by default
+# (NORA_WORKSPACE_ENABLED); enable with `uv sync --extra workspace`. `langchain-mcp-adapters` builds
+# the per-run MCP client; `pyjwt` lets the Aegra custom-auth handler (auth.py) verify the
+# NextAuth-minted session JWT. Kept an extra so the base install + offline suite stay
+# dependency-light (the flag-off path never imports either).
+workspace = [
+    "langchain-mcp-adapters>=0.1",
+    "pyjwt>=2.9",
+]
 
 [project.scripts]
 # Build the writable operations DB (deterministic; safe to re-run). Needs no provider key.
