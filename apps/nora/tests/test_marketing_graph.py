@@ -12,11 +12,12 @@ import os
 
 import pytest
 
-from nora.config import get_settings
+from nora.config import Settings, get_settings
 from nora.marketing.graph import build_marketing_graph, initial_marketing_state
 from nora.marketing.nodes import _BriefCopy, _ScriptDraft, _Storyboard
 from nora.schemas import ConceptIdea, Critique, ScriptBeat, Shot, VideoBrief
-from tests.fakes import ScriptedStructuredModel
+from nora.services.renderer import OpenRouterRenderer
+from tests.fakes import FakeOpenRouterClient, ScriptedStructuredModel
 
 BANNED = ["cure", "guaranteed", "#1 in the world"]
 
@@ -154,7 +155,36 @@ def test_render_returns_placeholder():
     graph = build_marketing_graph(model=_passing_model(), auto_approve=True)
     result = graph.invoke(initial_marketing_state("reel", "Cloves"))
     assert result["render_result"]["status"] == "placeholder"
-    assert result["render_result"]["asset_ref"] is None
+    assert result["render_result"]["mode"] == "none"
+    assert result["render_result"]["shots"] == []
+
+
+def test_render_with_injected_openrouter_renderer(tmp_path):
+    # The renderer is injectable: drive the real OpenRouter adapter through the graph offline.
+    settings = Settings(media_dir=tmp_path)
+    renderer = OpenRouterRenderer(settings, client=FakeOpenRouterClient())
+    graph = build_marketing_graph(model=_passing_model(), auto_approve=True, renderer=renderer)
+    result = graph.invoke(initial_marketing_state("reel", "Cloves"))
+
+    rr = result["render_result"]
+    assert rr["status"] == "rendering"
+    assert rr["hero_image_url"] and rr["shots"]
+    assert all(s["video_job_id"] for s in rr["shots"])
+
+
+def test_render_failure_degrades_to_error_result():
+    # A render failure (network, or NORA_RENDERER=openrouter with no key) must not sink the turn —
+    # the brief still ships and the render result records the error.
+    class _BoomRenderer:
+        def render(self, brief):  # noqa: ARG002
+            raise RuntimeError("openrouter down")
+
+    graph = build_marketing_graph(model=_passing_model(), auto_approve=True, renderer=_BoomRenderer())
+    result = graph.invoke(initial_marketing_state("reel", "Cloves"))
+
+    assert result["brief"]  # the finished brief survived the render failure
+    assert result["render_result"]["status"] == "error"
+    assert "openrouter down" in result["render_result"]["detail"]
 
 
 @pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="requires a live LLM key")

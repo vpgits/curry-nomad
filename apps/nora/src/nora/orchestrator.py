@@ -250,6 +250,11 @@ def build_orchestrator(
             )
         if result.get("critique"):
             push_ui_message("marketing_critique", result["critique"], message=final)
+        # Real-render card: hero image + per-shot stills, plus the video job ids the UI polls.
+        # Skipped for the placeholder/cancelled renderer (nothing to show).
+        render_result = result.get("render_result")
+        if render_result and render_result.get("status") in ("rendering", "rendered", "error"):
+            push_ui_message("marketing_render", render_result, message=final)
         return {"messages": [final]}
 
     def routing(state: OrchestratorState) -> dict:

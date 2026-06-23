@@ -79,7 +79,15 @@ curry-nomad/
 | `marketing_num_concepts` | int | `3` | parallel ideation count |
 | `renderer` | Literal["placeholder","openrouter"] | `"placeholder"` | adapter selection |
 | `openrouter_api_key` | str \| None | `None` | only used by openrouter renderer |
-| `openrouter_video_model` | str | `""` | TODO: set when OpenRouter video is wired |
+| `openrouter_base_url` | str | `https://openrouter.ai/api/v1` | OpenRouter API base |
+| `openrouter_image_model` | str | `black-forest-labs/flux.2-flex` | image-gen model (OpenRouter id) |
+| `openrouter_video_model` | str | `google/veo-3.1-lite` | video-gen model (OpenRouter id) |
+| `render_aspect_ratio` / `render_resolution` | str | `9:16` / `720p` | reel format + resolution |
+| `render_video_duration_s` | int | `6` | per-shot clip length |
+| `render_generate_audio` | bool | `False` | audio adds cost/latency |
+| `render_max_shots` | int | `4` | cap shots rendered (cost guard) |
+| `media_dir` | Path | `…/data/runtime/media` | where stills are written (served by ops-api `/media`) |
+| `media_public_base_url` | str \| None | `None` | public origin for image→video first-frame; unset → text→video |
 
 LangSmith tracing is configured purely by standard env vars (`LANGSMITH_TRACING=true`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`) — not in Settings. Provider keys (`OPENAI_API_KEY` etc.) read from env by the integration packages. **No secret ever lives in code or in committed files.**
 
@@ -95,9 +103,9 @@ LangSmith tracing is configured purely by standard env vars (`LANGSMITH_TRACING=
 ## 5. `schemas.py` — typed contracts (Pydantic + dataclass)
 
 ```python
-# Router
+# Router  (post-M8: "routing" added for delivery-route requests — see §15)
 class RouteDecision(BaseModel):
-    capability: Literal["analytics", "marketing", "clarify"]
+    capability: Literal["analytics", "marketing", "routing", "clarify"]
     reason: str
     product_hint: str | None = None     # product name/id if a marketing request references one
 
@@ -171,9 +179,8 @@ class Renderer(Protocol):
 - Deterministic: same DB file + same query → same rows.
 
 ### `renderer.py`
-- `PlaceholderRenderer(Renderer)` — **default.** Returns `{"status":"placeholder","asset_ref":None,"detail":"render skipped; prompts ready"}`, logs the shot prompts. No external calls.
-- `OpenRouterRenderer(Renderer)` — **stub/TODO.** Documented shape only: will POST the per-shot `t2v_prompt`s to an OpenRouter video model (`openrouter_video_model`) using `openrouter_api_key`, stitch/collect results, return an `asset_ref`. Left unimplemented in v1 (raises `NotImplementedError` with a clear TODO). **⚠️ verify** OpenRouter's current video-generation surface when implementing.
-- `get_renderer(settings) -> Renderer` factory selects by `settings.renderer`.
+- `PlaceholderRenderer(Renderer)` — **default.** Returns a `RenderResult` stub (`status="placeholder"`, `mode="none"`, no shots); no external calls, no spend.
+- `OpenRouterRenderer(Renderer)` — **implemented** (post-M7; see §18). Generates a hero image + a per-shot still (synchronously, OpenRouter `/images`) and submits one image→video job per shot (`/videos`), returning a `RenderResult` whose shots carry `image_url` + `video_job_id` for the UI to poll. Talks to OpenRouter through `services/openrouter.py` (an injectable client, so tests run offline). `get_renderer(settings) -> Renderer` selects by `settings.renderer`.
 
 ## 7. `memory.py`
 
@@ -215,6 +222,7 @@ Nodes & flow:
 ```
 START → route → (Command goto) → analytics | marketing | clarify → END
 ```
+> **Post-M8/M9 (see §15–§17):** `route` also dispatches to a deterministic **`routing`** node (delivery routes via the ops API). `analytics` is wired as a **real subgraph node** so its tool steps + answer stream inline, then flows through an `analytics_dashboard` node that attaches a generative-UI card. Each capability pushes typed UI cards via `push_ui_message` (§16).
 - **`route` node:** builds `init_chat_model(settings.router_model).with_structured_output(RouteDecision)`, classifies the latest user message, logs `route.decided`, returns `Command(goto=decision.capability, update={"route": decision})`. (Routing via `Command(goto=...)`, per docs.)
 - **`analytics` node:** invokes the compiled analytics subgraph with the messages; appends its final AI message.
 - **`marketing` node:** seeds `MarketingState` from the route (`request`, `product_hint`), invokes the marketing subgraph, appends a summary AI message + attaches the `VideoBrief` (as message content / structured field).
@@ -283,7 +291,7 @@ Compile with the shared checkpointer (HITL needs it) + store.
 ## 13. Entry points & running
 
 - **`app.py`** — a small CLI: `python -m nora.app "What was our best-selling product in Colombo last quarter?"`. Builds the orchestrator, runs `graph.stream_events(..., version="v3")`, prints streamed messages, and on `stream.interrupts` prompts the operator in the terminal (approve/edit/reject) then resumes with `Command(resume=...)`. This is what the instructor drives live.
-- **`langgraph.json`** — registers the orchestrator graph as `nora` so `langgraph dev` can serve it (nice for showing traces / the Studio UI). Store/checkpointer auto-provisioned there; include the `store.index` block for semantic search.
+- **`langgraph.json` → `aegra.json` (post-launch).** The serving layer moved from `langgraph dev` to **Aegra** (a self-hosted, Postgres-backed Agent Protocol backend). `aegra.json` registers the orchestrator as `nora` (plus `nora_a2ui`, §17) and carries the same `store.index` block; Aegra provides a Postgres checkpointer + semantic Store at runtime. Unlike `langgraph dev`, Aegra enforces no blocking-call check, so the synchronous `.invoke()` subgraph calls need no flag. Run `aegra dev` / `aegra serve` (`uv sync --extra aegra`). The graph code is unchanged — the point of the Agent Protocol.
 - **Production shortcut appendix:** a commented reference showing the analytics agent rebuilt in ~5 lines with `create_agent(model=..., tools=[...], system_prompt=..., checkpointer=..., response_format=...)` — to make the "you'd normally use the prebuilt; here's what it hides" point.
 
 ## 14. Open ⚠️ verify items (confirm at first touch)
@@ -291,3 +299,54 @@ Compile with the shared checkpointer (HITL needs it) + store.
 - `with_structured_output` exact return for `TypedDict` vs `BaseModel` (docs: BaseModel → instance).
 - `handle_tool_errors` default behavior when unset.
 - OpenRouter's current text-to-video API surface (for the real renderer).
+
+---
+
+# Post-M7 additions
+
+> The original spec (§1–§14) describes the two-capability build. The sections below were added with the operations subsystem (M8) and the generative-UI layer (M9). They extend the same architecture — same principles, same ports-&-adapters discipline.
+
+## 15. Operations subsystem (`operations/`) — the deterministic, non-agentic backend
+
+The "limits of agentic development" made **structural**, not a lecture: a real operations backend the agent can only *call*, so it cannot oversell or invent a route. Layered, each layer with one job:
+
+- **`schema.py`** — DDL for a **writable** SQLite DB (`ref_products`/`ref_customers` snapshots, `stock_levels`, an append-only `stock_ledger`, `ops_orders`/`ops_order_items`, `routes`/`deliveries`), kept **separate** from the read-only `curry_nomad.db` so the committed dataset stays pristine. Core invariants (`reserved <= on_hand`, both `>= 0`) are CHECK-enforced at the DB layer too.
+- **`interfaces.py`** — `OperationsStore` Protocol (read-write data access + a `tx()` transaction seam; **zero** business rules). Mirrors `services/interfaces.py:SpiceDB` — a Postgres adapter is wiring-only.
+- **`store.py`** — `SqliteOperationsStore(OperationsStore)`: fresh connection per call, `PRAGMA foreign_keys=ON`, `tx()` drives `BEGIN IMMEDIATE`/`COMMIT`/`ROLLBACK`.
+- **`models.py`** — frozen, JSON-native dataclasses (`StockRow`, `LedgerEntry`, `Order`, `RoutePlan`, `RouteStop`, …) that `asdict` straight to the REST layer.
+- **`services.py`** — the **single source of truth for every business rule**. Every function takes an injected `OperationsStore` (testable, no globals); every mutation runs in one `tx()` (stock UPDATE + ledger INSERT commit together or not at all); every rejection raises **`OperationsError`** with a human-readable message (the deliberate analogue of `SqlError` — a narrow, intentional exception callers translate, while any other exception fails loud). Timestamps come from `settings.data_as_of`, never the wall clock.
+- **`routing.py`** — a pure, deterministic delivery-route optimizer: **haversine** distance matrix → **nearest-neighbor** greedy tour → **2-opt** local search, reporting `naive_km` (input order, "no planning") as the baseline the demo contrasts against. No solver dep, no `random`, no wall-clock. This is the headline lesson: vehicle routing is NP-hard, so we don't ask the LLM to guess a tour — it calls *this*.
+- **`geo.py`** — fixed `(lat, lng)` for the depot + delivery cities (a constant, so seed and services share coordinates).
+- **`seed.py`** — `python -m nora.operations.seed` builds the writable DB deterministically (fixed RNG seed, no wall-clock; snapshots reference data + derives initial stock from real sales volume; plants below-reorder SKUs and a zig-zag delivery set).
+- **`api.py`** — a **thin** FastAPI layer: each route parses, calls the matching `services.*`, returns JSON. No business logic. One handler turns `OperationsError` into a structured `409` (and 404 for missing ids). Served by `nora-ops-api` on :8000 — **no LLM, no API key**.
+
+**The `routing` capability** (in `orchestrator.py`): a deterministic node (no LLM) that plans today's route by calling the ops API (`POST /routes/plan`) — the **same** endpoint the web app uses — so the writable DB stays single-owner (no dual-writer SQLite). The planner is injectable (`route_planner`) so offline tests supply a canned plan. It pushes a `route_map` card (§16); if the ops service is unreachable it replies in text, never crashes.
+
+New `Settings` fields: `ops_db_path` (writable DB, package-relative), `ops_api_url` (default `http://localhost:8000`). New `operations` extra (`fastapi`, `uvicorn`, `httpx`) and scripts `nora-ops-seed` / `nora-ops-api`.
+
+## 16. Generative UI — native `push_ui_message` (no CopilotKit)
+
+Each capability attaches typed UI **cards** to its final message; the web client renders them via `LoadExternalComponent`. The chat is `useStream` → Aegra; gen-UI is push-based and native.
+
+- **Channel:** `from langgraph.graph.ui import push_ui_message` → `push_ui_message("<name>", payload_dict, message=ai_message)`. The card is anchored to the message id; the client maps the name to a React component.
+- **Cards:** `analytics_dashboard` (composed post-hoc by a `dashboard_model` from the agent's final answer + the SQL it ran); the marketing set `video_brief` / `marketing_storyboard` / `marketing_script_timeline` / `marketing_critique`; and `route_map` (rendered as a Leaflet map).
+- **Schemas (`schemas.py`):** `AnalyticsDashboard` = `title` + `stats: list[DashboardStat]` + optional `table: DashboardTable` + optional `chart: DashboardChart` (the builder model **chooses** `kind` ∈ `bar|line|pie|none` to fit the data — the canonical "agent picks the visualization" move).
+- **Best-effort, never load-bearing:** every card build is wrapped — a failure (or no provider key offline, or a non-dashboard-worthy answer) skips the card; the streamed text answer is never blocked.
+- **Streaming discipline:** the internal `with_structured_output` calls that build cards (router, `dashboard_model`, every marketing node) use `disable_streaming=True`, so their forced-tool-call deltas don't surface as phantom partial messages on Aegra's `messages` stream. Only the analytics agent streams — its tokens *are* the user-facing answer.
+- **Second HITL gate:** with gen-UI, marketing gains an interactive `choose_concept` gate (`auto_choose=False`) whose `interrupt` payload carries `kind: "concept_pick"` (vs the script gate's `kind: "script_review"`), so the UI tells them apart.
+
+## 17. A2UI studio (`a2ui_studio.py`, graph `nora_a2ui`) — the dynamic-schema contrast
+
+Where §16's dashboard has a **fixed** shape, this graph lets a model **author** the surface — the "LLM authors the UI" (dynamic-schema A2UI) pattern, the deliberate mirror of the repo's agent-vs-workflow split (there the *code* picks components; here the *model* composes them).
+
+- **Flow:** `START → analytics (subgraph) → ui_author → END`. `ui_author` composes from the same final answer + SQL the dashboard uses, and pushes an `a2ui_surface` card on the same native channel.
+- **Schema:** `A2uiSurface` = an ordered `list[A2uiBlock]`; each block's `type` ∈ `heading|text|metrics|chart|table` selects which optional fields apply. **Deliberately one flat model, not a discriminated union** — OpenAI strict structured-output rejects `anyOf`/`oneOf`, so a union would make the authoring call throw (the same constraint shapes `AnalyticsDashboard`). Worth a `⚠️` note for anyone extending the block catalog.
+- **Wiring:** `make_a2ui_graph()` is registered in `aegra.json` as `nora_a2ui` (Postgres checkpointer + Store injected by the platform, exactly like `make_graph()`); the web `/studio` route renders it via its block catalog.
+
+## 18. Marketing rendering — real media via OpenRouter (the M7 "real adapter", implemented)
+
+The `Renderer` port's real adapter. Placeholder stays the default (`NORA_RENDERER=placeholder`, no key, no spend); `NORA_RENDERER=openrouter` swaps in `OpenRouterRenderer` — pure wiring, no graph change (the ports-&-adapters payoff M7 promised).
+
+- **Two OpenRouter surfaces (`services/openrouter.py`):** images are **synchronous** (`POST /images` → base64 `data[].b64_json`); video is an **async job** (`POST /videos` → `{id, polling_url}`, poll `GET /videos/{id}` until `completed`, then `unsigned_urls` / `…/content`). The client is a thin httpx wrapper (not `init_chat_model` — this isn't a chat model) and is **injectable** so the renderer's tests run offline against a fake.
+- **What `render(brief)` does:** generate a hero image + a still per shot (capped at `render_max_shots`), persist them under `media_dir`, then submit one image→video job per shot and return a `RenderResult` (`status`, `mode`, `hero_image_url`, `shots:[{index, image_url, video_job_id, …}]`). It only *submits* video — the slow polling is the UI's job (the decision: don't block the chat turn for minutes).
+- **Serving + the public-URL constraint:** stills are served by the **ops-api at `/media`** (keyless `StaticFiles`, on a dir/volume shared with the renderer). OpenRouter fetches the image→video first frame from a **public** URL, so image→video is used only when `media_public_base_url` is set; otherwise the renderer falls back to **text→video** (recorded in `RenderResult.mode`). Video status + content are proxied by the web's `app/api/render/video/[jobId]` route handlers (the OpenRouter key stays server-side); the `marketing_render` card (§16) polls them and swaps each still for a `<video>` when the job completes.

@@ -76,6 +76,42 @@ class VideoBrief(BaseModel):
     product_facts_used: list[str]  # for the grounding eval
 
 
+# --- Marketing render (real media generation via OpenRouter) --------------------------
+#
+# What the OpenRouterRenderer produces from a finished VideoBrief: a hero image, a still per shot,
+# and (async) one video job per shot. Images are generated synchronously; videos are submitted as
+# OpenRouter jobs and polled from the UI, so each shot carries its job id rather than a finished
+# URL. Rendered over the same push_ui_message channel as the other marketing cards.
+
+
+class RenderShot(BaseModel):
+    """One storyboard shot's rendered assets. `image_url` is ready immediately; the video is a
+    pending OpenRouter job the UI polls (`video_job_id`) until it completes."""
+
+    index: int
+    scene_description: str
+    t2v_prompt: str
+    image_url: str | None = None  # served still (first frame), or None if image gen failed
+    video_job_id: str | None = None  # OpenRouter /videos job id, or None if submission failed
+    error: str | None = None
+
+
+class RenderResult(BaseModel):
+    """The renderer's output (the `render_result` in marketing state + the `marketing_render` card).
+
+    `status`: placeholder (no render) | rendering (jobs submitted, UI polls) | rendered (sync-only)
+    | cancelled | error. `mode` records whether videos are first-frame-conditioned (`image_to_video`,
+    when a public media URL is configured) or `text_to_video` (the local fallback)."""
+
+    status: Literal["placeholder", "rendering", "rendered", "cancelled", "error"] = "placeholder"
+    mode: Literal["image_to_video", "text_to_video", "none"] = "none"
+    hero_image_url: str | None = None
+    shots: list[RenderShot] = Field(default_factory=list)
+    image_model: str | None = None
+    video_model: str | None = None
+    detail: str = ""
+
+
 # --- Analytics generative-UI dashboard ------------------------------------------------
 
 

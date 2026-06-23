@@ -37,6 +37,13 @@ A clean, runnable LangGraph application built **as a teaching artifact** — the
 
 Same orchestrator, both paradigms, grounded in the same data.
 
+> **Addendum — what got built beyond this plan.** The sections below describe the original two-capability build. The codebase has since grown:
+> - **A third, deterministic pillar — Operations / Routing** (`operations/`): a non-agentic backend (writable store, business-rule services, an NP-hard delivery-route optimizer behind a REST API) that the agent only *calls*. This is the **"limits of agentic development"** lesson made structural — the rules live in code, not a prompt, so the agent can't oversell or invent a route. The orchestrator gains a fourth route, `routing`.
+> - **Native generative UI** (`push_ui_message` → `LoadExternalComponent`, no CopilotKit): each capability surfaces typed cards — an analytics dashboard (the model *picks* the chart kind), the marketing storyboard/timeline/critique, a Leaflet `route_map` — and `a2ui_studio.py` goes further, letting a model *author* the surface from a block catalog (the `/studio` dynamic-schema showcase). Marketing also gains a second HITL gate (concept pick, then script).
+> - **Serving via Aegra** (a self-hosted, Postgres-backed Agent Protocol backend) in place of `langgraph dev`, with a Next.js `useStream` web UI. Graph code unchanged.
+>
+> See `specs/` (M8/M9 in `03_milestones.md`, §15–§17 in `01_implementation_spec.md`) for the build-level detail.
+
 ---
 
 ## 3. Teaching objectives → where each lives
@@ -55,6 +62,8 @@ Same orchestrator, both paradigms, grounded in the same data.
 | **Evaluation (two kinds)** | analytics = deterministic ground truth; marketing = LLM-judge + guardrails |
 | **Reliability** | retries/backoff, SQL guards, typed errors |
 | **Ports & adapters / testability** | services behind interfaces; fakes by default, real adapters optional |
+| **Limits of agentic dev** *(added)* | operations: business rules + an NP-hard route optimizer the agent only *calls* (`operations/`) |
+| **Generative UI** *(added)* | native `push_ui_message` cards (dashboard, storyboard, Leaflet route map) + the `/studio` "LLM authors the UI" graph |
 
 ---
 

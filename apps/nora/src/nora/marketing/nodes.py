@@ -245,7 +245,8 @@ def make_cancel(settings: Settings):
         return {
             "render_result": {
                 "status": "cancelled",
-                "asset_ref": None,
+                "mode": "none",
+                "shots": [],
                 "detail": "creative cancelled by user",
             }
         }
@@ -362,11 +363,22 @@ def make_assemble(model, settings: Settings):
     return assemble
 
 
-def make_render(settings: Settings):
-    """Render the brief. Placeholder by default (no external call, no spend)."""
+def make_render(settings: Settings, *, renderer=None):
+    """Render the brief. Placeholder by default (no external call, no spend). `renderer` is
+    injectable so tests drive the real OpenRouter adapter offline against a fake client.
+
+    Best-effort: real rendering hits external HTTP (and a misconfig — `NORA_RENDERER=openrouter`
+    with no key — fails at construction), so a render failure degrades to an `error` result rather
+    than crashing the whole marketing turn. The brief + the other cards still ship."""
 
     def render(state) -> dict:
-        result = get_renderer(settings).render(VideoBrief(**state["brief"]))
+        try:
+            r = renderer or get_renderer(settings)
+            result = r.render(VideoBrief(**state["brief"]))
+        except Exception as exc:  # noqa: BLE001 — never let rendering sink the finished brief
+            log.info("render.error", error=str(exc))
+            result = {"status": "error", "mode": "none", "shots": [],
+                      "detail": f"render failed: {exc}"}
         return {"render_result": result}
 
     return render

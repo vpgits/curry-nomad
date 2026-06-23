@@ -8,6 +8,7 @@ import { LoadExternalComponent } from "@langchain/langgraph-sdk/react-ui";
 
 import { AnalyticsDashboard } from "@/components/AnalyticsDashboard";
 import { CritiqueCard } from "@/components/CritiqueCard";
+import { MarketingRenderCard } from "@/components/MarketingRenderCard";
 import { RouteMapCard } from "@/components/operations/RouteMapCard";
 import { ScriptTimeline } from "@/components/ScriptTimeline";
 import { StoryboardFilmstrip } from "@/components/StoryboardFilmstrip";
@@ -27,6 +28,7 @@ const UI_COMPONENTS = {
   marketing_storyboard: StoryboardFilmstrip,
   marketing_script_timeline: ScriptTimeline,
   marketing_critique: CritiqueCard,
+  marketing_render: MarketingRenderCard,
   route_map: RouteMapCard,
 };
 // ui.name values that mark a turn as the marketing workflow (drives the ModeChip).
@@ -35,6 +37,7 @@ const MARKETING_UI = new Set([
   "marketing_storyboard",
   "marketing_script_timeline",
   "marketing_critique",
+  "marketing_render",
 ]);
 
 type ToolCall = { name: string; args: Record<string, unknown>; id?: string };

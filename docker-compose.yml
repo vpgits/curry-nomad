@@ -56,6 +56,11 @@ services:
       # Tracing is opt-in (empty = off). See the Langfuse note at the top of this file.
       OTEL_TARGETS: ${OTEL_TARGETS:-}
       LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-http://host.docker.internal:3001}
+      # Generated marketing media (OpenRouter renderer) lands here, on a volume shared with ops-api
+      # (which serves it at /media). Fixed path so it's independent of the package location.
+      NORA_MEDIA_DIR: /media-data
+    volumes:
+      - nora_media:/media-data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -91,6 +96,11 @@ services:
       - sh
       - -c
       - "python -m nora.operations.seed && exec uvicorn nora.operations.api:app --host 0.0.0.0 --port 8000"
+    environment:
+      # Serve generated marketing media from the same volume the aegra renderer writes to.
+      NORA_MEDIA_DIR: /media-data
+    volumes:
+      - nora_media:/media-data
     ports:
       - "8000:8000"
     healthcheck:
@@ -114,6 +124,11 @@ services:
         NEXT_PUBLIC_OPS_API_URL: ${NEXT_PUBLIC_OPS_API_URL:-http://localhost:8000}
     image: curry-nomad-web:latest
     restart: unless-stopped
+    environment:
+      # Server-side only: the /api/render/video proxy polls + streams OpenRouter video jobs for the
+      # marketing render card. Reuses the backend's render key (NORA_OPENROUTER_API_KEY in .env).
+      OPENROUTER_API_KEY: ${NORA_OPENROUTER_API_KEY:-}
+      OPENROUTER_BASE_URL: ${NORA_OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
     ports:
       - "3000:3000"
     depends_on:
@@ -124,3 +139,4 @@ services:
 
 volumes:
   nora_postgres_data:
+  nora_media:

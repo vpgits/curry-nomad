@@ -55,10 +55,34 @@
 - No secrets committed; `.gitignore` covers `.env`, `__pycache__`, etc. (DB seed is intentionally committed).
 
 ## M7 — Optional: real adapters (the "production I/O" coda)
-**Files:** implement `OpenRouterRenderer`; document `SqliteSaver`/`PostgresStore` swaps.
+**Files:** `OpenRouterRenderer` + `services/openrouter.py` (now **implemented** — see §18 of `01_implementation_spec.md`); ops-api `/media` serving; web render card + video proxy routes; document `SqliteSaver`/`PostgresStore` swaps.
 **Acceptance:**
-- `NORA_RENDERER=openrouter` with a key produces a real `asset_ref` from the per-shot prompts (**⚠️ verify** OpenRouter video API first).
+- `NORA_RENDERER=openrouter` (+ `OPENROUTER_API_KEY`) generates a hero image + per-shot stills and submits one image→video job per shot; the `marketing_render` card polls each and swaps in the video. Falls back to text→video unless `NORA_MEDIA_PUBLIC_BASE_URL` is set (OpenRouter needs a public first-frame URL). The full test suite stays **offline** (the OpenRouter client is injected as a fake).
 - Swapping `InMemorySaver`→`SqliteSaver` and `InMemoryStore`→`PostgresStore` is a config/wiring change only (no graph changes) — demonstrates ports & adapters.
+
+---
+
+# Post-M7 phases (built after the original plan)
+
+> M0–M7 above are the original two-capability build. The milestones below were added later and extend the same architecture; they're the "limits of agentic dev" pillar and the generative-UI layer. (The serving layer also moved from `langgraph dev` to **Aegra** — a self-hosted Agent Protocol backend, Postgres-backed; `langgraph.json` → `aegra.json`. Graph code is unchanged.)
+
+## M8 — Operations subsystem + the `routing` capability (the "limits of agentic dev" pillar)
+**Files:** `operations/{errors,interfaces,models,schema,store,services,geo,routing,seed,api}.py`; a `routing` node + `_plan_route_via_ops_api` in `orchestrator.py`; `RouteDecision` gains `"routing"`; the `operations` extra in `pyproject.toml`; `tests/test_operations_{services,routing,seed,api}.py`.
+**Acceptance:**
+- `python -m nora.operations.seed` builds the **writable** ops DB deterministically (fixed RNG, no wall-clock → re-run is byte-identical), kept separate from the read-only `curry_nomad.db`; it plants a few below-reorder SKUs and a zig-zag delivery set so the demos have signal.
+- The services own every invariant: `create_order` rejects an oversell, `adjust_stock` can't drive stock below zero, and every mutation is one atomic `tx()` + a stock-ledger entry. Rejections raise `OperationsError` (the deliberate analogue of `SqlError`) → the REST layer returns a structured `409`.
+- `routing.plan_route` returns an optimized tour (haversine → nearest-neighbor → 2-opt) shorter than the reported `naive_km` baseline, and is deterministic (no `random`/wall-clock).
+- The REST API serves stock/orders/routes (`nora-ops-api` on :8000, no LLM); the orchestrator routes "plan today's delivery route" to the `routing` capability, which plans via the ops API.
+- `test_operations_*` pass **offline with no fakes** — the layer is deterministic, so it's tested directly against a disposable writable DB.
+
+## M9 — Native generative UI + the A2UI studio
+**Files:** `schemas.py` (`AnalyticsDashboard`/`DashboardStat`/`DashboardChart`… and the `A2uiSurface`/`A2uiBlock` families); `analytics_dashboard` node + `push_ui_message` calls in `orchestrator.py`; the marketing card pushes; the `route_map` push (M8); `a2ui_studio.py` (the `nora_a2ui` graph); `aegra.json` (registers the second graph); `apps/web` `LoadExternalComponent` renderers (dashboard, concept/script gates, storyboard/timeline/critique, Leaflet route map, `/studio`); `tests/test_generative_ui.py`.
+**Acceptance:**
+- An analytics answer attaches an `analytics_dashboard` card (stats/table/chart, with the chart **kind chosen to fit** the data); marketing attaches `video_brief` + `marketing_storyboard`/`_script_timeline`/`_critique`; the `routing` capability attaches a `route_map` (rendered as a Leaflet map).
+- Gen-UI is **best-effort**: with no provider key (offline) or a non-dashboard-worthy answer, the card is skipped and the streamed text answer is unaffected.
+- Marketing now has **two** HITL gates: `choose_concept` raises an `interrupt` with payload `kind: "concept_pick"`; `human_review` with `kind: "script_review"`. Both default to skip (`auto_choose`/`auto_approve`) so evals/tests keep the single script gate.
+- The `nora_a2ui` graph (`analytics → ui_author`) lets a model **author** the surface from a block catalog (`A2uiSurface`); the web `/studio` renders it — the dynamic-schema contrast to the fixed dashboard.
+- `test_generative_ui.py` asserts the `push_ui_message` payloads for each card.
 
 ---
 
@@ -71,3 +95,5 @@
 | M3 + M4 | Orchestrator + HITL + memory (0:55–1:05) |
 | M5 | Observability + evals, live (1:05–1:25) |
 | M6/M7 | Extensibility + before/after (1:25–1:30) |
+| M8 | Operations / "limits of agentic dev" (post-launch) |
+| M9 | Generative UI + A2UI studio (post-launch) |

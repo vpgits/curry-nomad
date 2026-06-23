@@ -124,3 +124,18 @@ These are printed by the runner and are the live "did our agent actually work?" 
 - Factual/tool agents → derive ground truth and check automatically (cheap, deterministic, CI-able).
 - Creative/generative workflows → judge against a rubric + hard guardrails; never a single "right" answer.
 - Trajectory matters, not just the final answer (the recovery metric).
+
+---
+
+## 5. Operations data — the writable DB (post-M8)
+
+The operations subsystem (M8) owns a **second, writable** SQLite DB, deliberately separate from the read-only `curry_nomad.db` so the committed analytics dataset stays pristine. Built by `python -m nora.operations.seed` into `settings.ops_db_path` (gitignored `data/runtime/operations.db`), with the same discipline as the analytics seed — `random.Random(42)`, **no wall-clock** → byte-identical on re-run.
+
+**Derived from the business DB:** it snapshots a subset of products/customers (so it's self-contained, no cross-DB ATTACH) and derives initial `on_hand` from each product's real historical sales volume, so stock numbers are plausible.
+
+**Planted truths (so the demos have signal):**
+- Initial `on_hand` ≈ 1.5 months of historical demand; reorder points ≈ half a month.
+- A few SKUs (White Pepper, Green Cardamom, Cloves gift tin, Goraka) are seeded **below** reorder point, so `/stock/low` is non-empty out of the box.
+- Eight pending deliveries are seeded across local cities in a deliberately **zig-zag** order, so a naive "visit-as-listed" route is clearly longer than the optimized one — the routing win is visible immediately (`naive_km` vs the 2-opt tour).
+
+**Testing, not evals.** Operations is deterministic, so it isn't graded by the LLM eval harness — it's covered by direct unit tests (`test_operations_{services,routing,seed,api}.py`): the services' invariants (oversell rejection, atomic tx + ledger), the optimizer (optimized ≤ naive, deterministic), and the REST API. The generative-UI push is likewise asserted by `test_generative_ui.py`, not the eval suites (cards are best-effort, never load-bearing).

@@ -48,6 +48,7 @@ def build_marketing_graph(
     store=None,
     auto_approve: bool = False,
     auto_choose: bool = True,
+    renderer=None,
 ):
     """Compile the marketing workflow. `model`/`spice_db` are injectable for offline tests.
 
@@ -86,7 +87,7 @@ def build_marketing_graph(
     builder.add_node("critique", nodes.make_critique(model, settings))
     builder.add_node("revise", nodes.make_revise(model, settings))
     builder.add_node("assemble", nodes.make_assemble(model, settings))
-    builder.add_node("render", nodes.make_render(settings))
+    builder.add_node("render", nodes.make_render(settings, renderer=renderer))
 
     builder.add_edge(START, "fetch_product")
     builder.add_edge("fetch_product", "load_brand")

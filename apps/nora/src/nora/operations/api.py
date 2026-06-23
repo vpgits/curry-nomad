@@ -19,6 +19,7 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from nora.config import get_settings
@@ -44,6 +45,15 @@ app.add_middleware(
 async def _operations_error_handler(_request: Request, exc: OperationsError) -> JSONResponse:
     """Every rejected mutation becomes a 409 carrying the service's message verbatim."""
     return JSONResponse(status_code=409, content={"error": str(exc)})
+
+
+# Serve generated marketing media (hero image + per-shot stills written by the OpenRouter renderer)
+# at /media. The renderer (in the nora graph) and this service share `settings.media_dir` — the same
+# repo dir locally, a shared volume in Docker. Static files only: no LLM, no OpenRouter key here, so
+# the ops service stays keyless. The dir is created if absent (renders may not have run yet).
+_media_dir = get_settings().media_dir
+_media_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/media", StaticFiles(directory=str(_media_dir)), name="media")
 
 
 def get_store() -> OperationsStore:

@@ -18,7 +18,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # The bundled DB lives next to this package, so the default path is correct no matter
@@ -31,6 +30,10 @@ _DEFAULT_DB_PATH = _PACKAGE_DIR / "data" / "curry_nomad.db"
 # in a gitignored `data/runtime/` dir (package-relative, so it's cwd-independent like the DB
 # above) and is (re)built by `python -m nora.operations.seed`.
 _DEFAULT_OPS_DB_PATH = _PACKAGE_DIR / "data" / "runtime" / "operations.db"
+# Generated marketing media (hero image, per-shot stills) lands here when the OpenRouter renderer
+# runs. Package-relative (cwd-independent) and gitignored like the runtime ops DB; the nora renderer
+# writes it and the ops-api serves it at /media (same repo locally; a shared volume in Docker).
+_DEFAULT_MEDIA_DIR = _PACKAGE_DIR / "data" / "runtime" / "media"
 
 
 class Settings(BaseSettings):
@@ -74,11 +77,26 @@ class Settings(BaseSettings):
     marketing_num_concepts: int = 3  # parallel ideation count
 
     # --- Rendering adapter ---
+    # Placeholder by default (no external calls, no spend). Switch to the real OpenRouter renderer
+    # with NORA_RENDERER=openrouter + an OPENROUTER_API_KEY. Every model/knob below is overridable.
     renderer: Literal["placeholder", "openrouter"] = "placeholder"
-    openrouter_api_key: str | None = None  # only used by the openrouter renderer
-    openrouter_video_model: str = Field(
-        default="",  # TODO: set when OpenRouter text-to-video is wired (M7)
-    )
+    openrouter_api_key: str | None = None  # OPENROUTER_API_KEY; only used by the openrouter renderer
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    # Cheapest-tier defaults (see the OpenRouter model lists). Image gen is synchronous; video is an
+    # async job (submit → poll). Both are `provider/model` ids on OpenRouter, not init_chat_model strings.
+    openrouter_image_model: str = "black-forest-labs/flux.2-flex"
+    openrouter_video_model: str = "google/veo-3.1-lite"
+    # Per-shot render knobs. Reels are vertical; keep duration/resolution small to bound spend.
+    render_aspect_ratio: str = "9:16"  # instagram_reel
+    render_resolution: str = "720p"
+    render_video_duration_s: int = 6
+    render_generate_audio: bool = False  # audio adds cost/latency; off for the demo
+    render_max_shots: int = 4  # cap the number of shots rendered (cost guard)
+    # Where generated images are written, and the PUBLIC base URL OpenRouter can fetch them from for
+    # image→video first-frame conditioning. Unset (the local default) → the renderer falls back to
+    # text→video, since OpenRouter can't reach a localhost media URL.
+    media_dir: Path = _DEFAULT_MEDIA_DIR
+    media_public_base_url: str | None = None  # e.g. an ngrok/deploy origin that serves /media
 
 
 @lru_cache(maxsize=1)

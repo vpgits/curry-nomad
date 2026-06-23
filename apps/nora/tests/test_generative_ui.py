@@ -15,6 +15,7 @@ from langgraph.types import Command
 
 from nora.a2ui_studio import build_a2ui_graph
 from nora.analytics.graph import build_analytics_graph
+from nora.config import Settings
 from nora.marketing.graph import build_marketing_graph, initial_marketing_state
 from nora.orchestrator import _build_dashboard, build_orchestrator
 from nora.schemas import (
@@ -26,7 +27,13 @@ from nora.schemas import (
     RouteDecision,
     VideoBrief,
 )
-from tests.fakes import ScriptedChatModel, ScriptedStructuredModel, ai_final
+from nora.services.renderer import OpenRouterRenderer
+from tests.fakes import (
+    FakeOpenRouterClient,
+    ScriptedChatModel,
+    ScriptedStructuredModel,
+    ai_final,
+)
 from tests.test_marketing_graph import _passing_model
 
 # --- marketing: interactive concept-pick gate -----------------------------------------
@@ -115,6 +122,30 @@ def test_orchestrator_chains_concept_then_script_gates():
     r3 = orch.invoke(Command(resume={"approved": True}), cfg)
     brief = next((u["props"]["brief"] for u in r3.get("ui", []) if u.get("name") == "video_brief"), None)
     assert brief is not None and brief["concept"] == "angle 1"  # the chosen concept drove the brief
+
+
+def test_marketing_render_card_carries_video_jobs(tmp_path):
+    """With the OpenRouter renderer injected, a finished marketing turn pushes a `marketing_render`
+    card carrying the hero image, per-shot stills, and the video job ids the UI polls."""
+    settings = Settings(media_dir=tmp_path)
+    orch = build_orchestrator(
+        router_model=_MarketingRouter(),
+        analytics_graph=_stub_analytics,
+        marketing_graph=build_marketing_graph(
+            model=_passing_model(),
+            auto_approve=True,
+            renderer=OpenRouterRenderer(settings, client=FakeOpenRouterClient()),
+        ),
+        checkpointer=InMemorySaver(),
+    )
+    cfg = {"configurable": {"thread_id": "render-card"}}
+    r = orch.invoke({"messages": [HumanMessage("make an ad for Cloves")]}, cfg)
+
+    card = next((u["props"] for u in r.get("ui", []) if u.get("name") == "marketing_render"), None)
+    assert card is not None
+    assert card["status"] == "rendering"
+    assert card["hero_image_url"].startswith("/media/")
+    assert card["shots"] and all(s["video_job_id"] for s in card["shots"])
 
 
 # --- analytics: the chosen chart ------------------------------------------------------

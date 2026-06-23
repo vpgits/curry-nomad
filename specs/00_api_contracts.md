@@ -171,6 +171,51 @@ for part in graph.stream(inputs, config, stream_mode=["updates", "messages"]):
     ...
 ```
 
+### Generative UI (native push) — `push_ui_message` → `LoadExternalComponent` (post-M9)
+```python
+from langgraph.graph.ui import push_ui_message
+
+def analytics_dashboard(state) -> dict:
+    final = state["messages"][-1]                      # the AI message the card anchors to
+    dashboard = build_dashboard(...)                   # a Pydantic model → .model_dump()
+    push_ui_message("analytics_dashboard", dashboard.model_dump(), message=final)
+    return {"messages": [final]}                        # same id → add_messages merges in place (no dup)
+```
+- A node emits a typed UI **card** on the graph's UI channel, anchored to a message id. The client maps the card name → a React component and renders it with `@langchain/langgraph-sdk/react-ui`'s `LoadExternalComponent`. No CopilotKit.
+- The web client must opt into subgraph streaming (`useStream({ streamSubgraphs: true, ... })`) so a subgraph node's messages + pushed cards surface in the parent thread.
+- **Keep card builds best-effort** — wrap in try/except; a failure must skip the card, never block the streamed text answer.
+- **`disable_streaming=True`** on any `with_structured_output` model whose result is consumed into state (router, dashboard, marketing) — otherwise its forced-tool-call deltas appear as phantom partial messages on the `messages` stream.
+
+### Serving layer — Aegra (replaces `langgraph dev`, post-launch)
+```jsonc
+// aegra.json (was langgraph.json)
+{
+  "dependencies": ["./apps/nora/src"],
+  "graphs": { "nora": "...orchestrator.py:make_graph", "nora_a2ui": "...a2ui_studio.py:make_a2ui_graph" },
+  "store": { "index": { "embed": "openai:text-embedding-3-small", "dims": 1536, "fields": ["text", "$"] } }
+}
+```
+- **Aegra** is a self-hosted, Postgres-backed Agent Protocol backend. `aegra dev` / `aegra serve` (install via `uv sync --extra aegra`). It injects a Postgres checkpointer + the semantic Store at runtime — so `make_graph()`/`make_a2ui_graph()` compile **without** their own.
+- Unlike `langgraph dev`, Aegra enforces **no** blocking-call check — synchronous `.invoke()` subgraph calls and synchronous SQLite need no flag. Threads/Store persist across restarts (Postgres).
+- The web client talks to it over the Agent Protocol via the official `@langchain/langgraph-sdk` `useStream` — graph code unchanged.
+
+### OpenRouter media generation — images (sync) + video (async job) (post-M7 renderer)
+```python
+# Images: synchronous. POST /api/v1/images → base64 inline.
+#   body: {model, prompt, aspect_ratio, n}
+#   resp: {"data": [{"b64_json": "<...>"}], "usage": {"cost": 0.04}}
+#
+# Video: asynchronous job. POST /api/v1/videos → poll → download.
+#   body: {model, prompt, duration, resolution, aspect_ratio, generate_audio,
+#          frame_images?: [{"type":"image_url","image_url":{"url": <PUBLIC https url>},"frame_type":"first_frame"}]}
+#   submit resp: {"id", "status", "polling_url"}            # 202
+#   poll:  GET /api/v1/videos/{id} → status ∈ pending|in_progress|completed|failed|cancelled|expired
+#   done:  {"status":"completed", "unsigned_urls": ["https://openrouter.ai/api/v1/videos/{id}/content?index=0"]}
+```
+- Auth: `Authorization: Bearer {OPENROUTER_API_KEY}`. Base: `https://openrouter.ai/api/v1`. These are **not** `init_chat_model` calls — a plain httpx client (`services/openrouter.py`).
+- **`frame_images` present → image→video** (first-frame conditioned); absent → text→video. The first-frame `url` must be a **public, directly-downloadable** HTTPS URL (no base64/`localhost`) — OpenRouter's servers fetch it.
+- Models are OpenRouter ids (`black-forest-labs/flux.2-flex`, `google/veo-3.1-lite`, …), not provider:model config strings.
+
 ## Reference doc pages to keep open while building
 - `/oss/python/langgraph/sql-agent` — Build a custom SQL agent (anchors the analytics agent)
 - `/oss/python/langgraph/interrupts` — HITL

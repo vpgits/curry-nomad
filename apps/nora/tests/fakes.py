@@ -96,3 +96,35 @@ class ScriptedStructuredModel:
             if not queue:
                 raise AssertionError(f"no scripted response for {getattr(schema, '__name__', schema)}")
             return queue.pop(0) if len(queue) > 1 else queue[0]
+
+
+# A minimal valid-enough PNG payload (the renderer only writes bytes to disk; it never decodes them).
+_FAKE_PNG = b"\x89PNG\r\n\x1a\nfake-image-bytes"
+
+
+class FakeOpenRouterClient:
+    """Duck-typed `OpenRouterClient` for offline renderer tests: returns canned image bytes and
+    fake video job ids, and records every call so tests can assert what was sent (e.g. whether a
+    first-frame URL was passed → image→video vs text→video)."""
+
+    def __init__(self):
+        self.image_calls: list[dict] = []
+        self.video_calls: list[dict] = []
+
+    def generate_image(self, *, model: str, prompt: str, aspect_ratio: str) -> bytes:
+        self.image_calls.append({"model": model, "prompt": prompt, "aspect_ratio": aspect_ratio})
+        return _FAKE_PNG
+
+    def submit_video(self, *, model, prompt, first_frame_url, duration_s, resolution,
+                     aspect_ratio, generate_audio) -> dict:
+        self.video_calls.append(
+            {"model": model, "prompt": prompt, "first_frame_url": first_frame_url,
+             "duration_s": duration_s, "resolution": resolution, "aspect_ratio": aspect_ratio,
+             "generate_audio": generate_audio}
+        )
+        return {"id": f"job-{len(self.video_calls)}", "status": "pending",
+                "polling_url": f"/api/v1/videos/job-{len(self.video_calls)}"}
+
+    def get_video(self, job_id: str) -> dict:
+        return {"id": job_id, "status": "completed",
+                "unsigned_urls": [f"/api/v1/videos/{job_id}/content?index=0"]}

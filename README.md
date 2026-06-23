@@ -2,21 +2,31 @@
 
 A clean, runnable **LangGraph / LangChain 1.x** application built as a teaching artifact: the
 reference codebase for a ~90-minute hands-on session on how to build agentic systems properly.
-It shows the two paradigms side by side under one orchestrator, plus the production concerns
-that make either one trustworthy: tools, human-in-the-loop, memory, observability, and evaluation.
+It shows the agent and workflow paradigms side by side under one orchestrator — with a
+deterministic, non-agentic operations backend as the counterpoint — plus the production concerns
+that make any of them trustworthy: tools, human-in-the-loop, memory, generative UI, observability,
+and evaluation.
 
 **Nora** is the operations assistant for **Curry Nomad**, a fictional Sri Lankan spice business.
-One orchestrator routes each request to one of two capabilities:
+One orchestrator routes each request to one of three capabilities that deliberately contrast:
 
 - **Analytics — an AGENT.** Answers questions over a bundled SQLite database: writes SQL, runs
   it, and *self-corrects when a query fails*. Open-ended, so it's a hand-built tool loop.
 - **Marketing Studio — a WORKFLOW.** Generates a structured video-ad brief for a product via a
-  predictable pipeline with a human-review checkpoint. Predictable, so it's a deterministic
-  graph: chaining + parallel fan-out + an evaluator-optimizer loop.
+  predictable pipeline with two human-review checkpoints (concept pick, then script). Predictable,
+  so it's a deterministic graph: chaining + parallel fan-out + an evaluator-optimizer loop.
+- **Operations / Routing — DETERMINISTIC SERVICES.** Inventory, orders, and an NP-hard delivery-route
+  optimizer, behind a REST API the agent merely *calls*. The "**limits of agentic development**"
+  pillar — the rules live in code, not a prompt, so the agent can't oversell or invent a route.
+
+Each capability surfaces its result as **native generative UI**: typed cards pushed over LangGraph's
+`push_ui_message` channel (an analytics dashboard, the marketing storyboard/timeline/critique, a
+Leaflet `route_map`) and rendered by the web client via `LoadExternalComponent` — no CopilotKit.
 
 **Canonical demo:** *"What's our best-selling product in Colombo last quarter?"* → the analytics
-agent answers (self-correcting a bad query) → *"Make a 30s video ad for it"* → the marketing
-workflow runs, pauses for you to approve the script, then finishes — all on one thread.
+agent answers (self-correcting a bad query, with a dashboard card) → *"Make a 30s video ad for it"* →
+the marketing workflow runs, pauses for you to pick a concept and approve the script, then finishes —
+all on one thread.
 
 ## Quickstart
 
@@ -72,8 +82,12 @@ uv run python apps/nora/scripts/seed_store.py   # seed brand voice + metric defi
 cd apps/web && cp .env.local.example .env.local && pnpm install && pnpm dev    # http://localhost:3000
 ```
 
-The UI streams Nora's answers, renders the marketing **approval card** (approve / edit / reject
-the script), and shows the final **VideoBrief**. See [`apps/web/`](apps/web/) for details.
+The UI streams Nora's answers and renders the native **generative-UI cards** pushed from the graph
+via `LoadExternalComponent`: an analytics **dashboard**, the marketing **concept-pick** and
+**script-approval** gates plus the final storyboard / timeline / critique, and a Leaflet
+**route map**. Dedicated operations pages (`/stock`, `/orders`, `/routes`, `/inventory`) read the
+ops REST API, and `/studio` shows the dynamic-schema "LLM authors the UI" graph. See
+[`apps/web/`](apps/web/) for details.
 
 ### Provider switch (one line)
 
@@ -102,12 +116,16 @@ semantic Store even when the chat model is Anthropic — or point it at another 
 | Safe tools (SELECT-only, LIMIT, timeout) | `services/spice_db.py` | Analytics agent |
 | **Prompt chaining + parallel fan-out (`Send`)** | `marketing/graph.py`, `marketing/nodes.py` | Marketing workflow (0:35–0:55) |
 | **Evaluator-optimizer loop** | `marketing` `critique` → `revise` | Marketing workflow |
-| **Routing** | `orchestrator.py` | Orchestrator + HITL (0:55–1:05) |
-| **Human-in-the-loop (`interrupt`)** | `marketing` `human_review` node | Orchestrator + HITL |
+| **Request routing (orchestrator)** | `orchestrator.py` (`route` → analytics / marketing / routing / clarify) | Orchestrator + HITL (0:55–1:05) |
+| **Human-in-the-loop (`interrupt`)** | `marketing` `choose_concept` + `human_review` (two gates) | Orchestrator + HITL |
 | **Memory: checkpointer + semantic Store** | `memory.py`, read via `runtime.store` in both | Orchestrator + HITL |
+| **Limits of agentic dev — deterministic services** | `operations/services.py` (business rules), `operations/api.py` | Operations |
+| **NP-hard delivery routing (no LLM)** | `operations/routing.py` (nearest-neighbor + 2-opt) | Operations |
+| **Native generative UI (`push_ui_message`)** | `orchestrator.py` / `marketing` cards → web `LoadExternalComponent` | Generative UI |
+| **Dynamic-schema UI (LLM authors the UI)** | `a2ui_studio.py`, `schemas.py` `A2uiSurface`, web `/studio` | Generative UI |
 | **Observability (structlog + LangSmith / Langfuse)** | `observability.py`, `docker-compose.langfuse.yml` | Observability + evals (1:05–1:25) |
 | **Evaluation (deterministic + LLM-judge)** | `evals/` | Observability + evals |
-| Ports & adapters, reliability | `services/`, `tenacity`, typed `SqlError` | Extensibility (1:25–1:30) |
+| Ports & adapters, reliability | `services/`, `operations/interfaces.py`, `tenacity`, typed `SqlError` / `OperationsError` | Extensibility (1:25–1:30) |
 
 ## How the pieces work
 
@@ -120,18 +138,33 @@ loud. The production shortcut (`create_agent`) is shown in an appendix comment.
 
 **Marketing workflow (`marketing/graph.py`).** A deterministic subgraph:
 `fetch_product → load_brand → ideate∥ → choose_concept → write_script → human_review → storyboard
-→ shot_prompt_worker∥ → critique → (assemble | revise)`. Concept ideation runs in parallel
+→ shot_prompt_worker∥ → critique → (assemble→render | revise)`. Concept ideation runs in parallel
 within a node; per-shot prompts fan out with `Send` and gather via a reducer; `critique → revise`
-loops until it passes or hits `marketing_max_revisions`. The single HITL gate sits before the
-expensive creative steps — gate by risk.
+loops until it passes or hits `marketing_max_revisions`. **Two** HITL gates sit before the expensive
+creative steps — gate by risk: `choose_concept` (pick from the parallel ideas) and `human_review`
+(approve / edit / reject the script). Both are skipped in eval/test mode (`auto_choose` /
+`auto_approve`).
+
+**Operations & delivery routing (`operations/`).** The non-agentic counterpoint — the "limits of
+agentic development" made structural. A writable SQLite store, business-rule services
+(`create_order` rejects an oversell, every mutation is one atomic transaction + ledger entry), and a
+thin FastAPI layer. `routing.py` is a deterministic delivery-route optimizer (haversine →
+nearest-neighbor → 2-opt) the agent *calls* rather than guessing a tour. Rejections raise
+`OperationsError` — the deliberate analogue of the analytics agent's `SqlError`.
+
+**Generative UI (native `push_ui_message`).** Each capability attaches typed UI cards to its final
+message; the web client renders them with `LoadExternalComponent` (no CopilotKit). The analytics
+dashboard is composed by a model from the answer + the SQL it ran; the `a2ui_studio.py` graph goes
+further and lets a model *author* the surface from a block catalog (the `/studio` showcase). Gen-UI
+is always best-effort — a failure skips the card, never the text answer.
 
 **Memory (`memory.py`).** A checkpointer (short-term, makes interrupt/resume work) and a semantic
 Store (long-term). Both are compiled into the graph and actually read in nodes via `runtime.store`:
 analytics pulls metric **definitions**, marketing pulls **brand voice**.
 
 **Observability (`observability.py`).** Structured `structlog` events with consistent keys
-(`route.decided`, `sql.run`, `sql.error`, `hitl.raised`, `marketing.revision`, `eval.scored`),
-never `print()`. Two optional, env-gated tracers sit on top: **LangSmith** turns on automatically
+(`route.decided`, `sql.run`, `sql.error`, `hitl.raised`, `marketing.revision`, `routing.planned`,
+`dashboard.built`, `eval.scored`), never `print()`. Two optional, env-gated tracers sit on top: **LangSmith** turns on automatically
 when `LANGSMITH_TRACING=true`; **Langfuse** attaches a LangChain `CallbackHandler` in the CLI
 (`get_langfuse_handler()`, gated on `LANGFUSE_PUBLIC_KEY`) — one attach point, because the
 orchestrator passes the same `config` into both subgraphs, so the whole turn (router → analytics
@@ -177,18 +210,20 @@ apps/
       state.py             TypedDict graph states + reducers
       memory.py            build_store / build_checkpointer / seed_brand_knowledge
       orchestrator.py      the router graph (entry point) + make_graph for Aegra
+      a2ui_studio.py       the dynamic-schema gen-UI graph (nora_a2ui) + make_a2ui_graph
       app.py               demo CLI (streams a turn, prompts on HITL)
       analytics/           tools.py · prompts.py · graph.py   (the AGENT)
       marketing/           prompts.py · nodes.py · graph.py   (the WORKFLOW)
+      operations/          schema · store · services · routing · api · seed   (DETERMINISTIC)
       services/            interfaces.py (ports) · spice_db.py · renderer.py
-      data/                seed.py + the committed curry_nomad.db
+      data/                seed.py + the committed curry_nomad.db (+ runtime/ writable ops DB)
     evals/                 datasets (.jsonl) · evaluators.py · run_evals.py
     tests/                 offline tests (fakes drive every graph without an API key)
     scripts/               seed_store.py (seed the platform Store over the API)
   web/                      Next.js chat UI (Agent Protocol client)
 docs/  specs/              case-study plan + build specs (read in order)
 pyproject.toml  uv.lock    single root Python package
-aegra.json                 graph + serving config (Aegra)
+aegra.json                 graph + serving config (Aegra; registers nora + nora_a2ui)
 ```
 
 ## Testing
@@ -199,15 +234,20 @@ uv run ruff check .  # lint
 ```
 
 The whole suite runs without a provider key by injecting fake models — the SQL self-correction
-loop, the marketing workflow, HITL pause/resume, routing, and the eval harness are all exercised
-offline. A handful of `@pytest.mark.skipif` tests run live end-to-end when `OPENAI_API_KEY` is set.
+loop, the marketing workflow, HITL pause/resume, request routing, the generative-UI push, and the
+eval harness are all exercised offline. The operations layer needs no fakes (it's deterministic):
+its services, the route optimizer, and the REST API are tested directly against a disposable
+writable DB. A handful of `@pytest.mark.skipif` tests run live end-to-end when `OPENAI_API_KEY` is set.
 
 ## Production swaps (the "you'd change one line" coda)
 
-- **Renderer:** `PlaceholderRenderer` (default, no external calls) ↔ `OpenRouterRenderer`
-  (`services/renderer.py`, stubbed for M7) via `NORA_RENDERER`.
+- **Renderer:** `PlaceholderRenderer` (default, no external calls) ↔ the real `OpenRouterRenderer`
+  (`services/renderer.py` — generates a hero image + per-shot stills and submits image→video jobs;
+  the `marketing_render` card polls them) via `NORA_RENDERER=openrouter` + `OPENROUTER_API_KEY`.
 - **Checkpointer:** `InMemorySaver` → `SqliteSaver` / `PostgresSaver` (`langgraph.checkpoint.*`).
 - **Store:** `InMemoryStore` → `PostgresStore` / `RedisStore`.
+- **Operations store:** `SqliteOperationsStore` → a `PostgresOperationsStore` implementing the same
+  `operations/interfaces.py:OperationsStore` Protocol.
 
 These are wiring changes only — no graph changes — which is the ports-&-adapters lesson.
 
@@ -218,5 +258,5 @@ data & evals, and milestones. Higher-level context is in
 [`docs/CASE_STUDY_PLAN.md`](docs/CASE_STUDY_PLAN.md).
 
 Stack: LangGraph 1.x · LangChain 1.x · Python 3.12 (uv) · pydantic / pydantic-settings ·
-structlog · tenacity · SQLite · pytest · ruff. No secrets in code; `.env` only (the DB seed is
-intentionally committed).
+structlog · tenacity · SQLite · FastAPI / uvicorn (operations API) · Next.js (web) · Aegra
+(serving) · pytest · ruff. No secrets in code; `.env` only (the DB seed is intentionally committed).

@@ -6,10 +6,11 @@ import json
 
 import pytest
 
-from nora.config import get_settings
+from nora.config import Settings, get_settings
 from nora.observability import get_logger, setup_logging
 from nora.schemas import ScriptBeat, Shot, ShotPrompt, VideoBrief
 from nora.services.renderer import OpenRouterRenderer, PlaceholderRenderer, get_renderer
+from tests.fakes import FakeOpenRouterClient
 
 
 def _brief() -> VideoBrief:
@@ -55,10 +56,39 @@ def test_default_renderer_is_placeholder():
 def test_placeholder_render_makes_no_external_call():
     result = PlaceholderRenderer().render(_brief())
     assert result["status"] == "placeholder"
-    assert result["asset_ref"] is None
+    assert result["mode"] == "none"
+    assert result["shots"] == []
 
 
-def test_openrouter_renderer_is_a_documented_stub():
-    renderer = OpenRouterRenderer(get_settings())
-    with pytest.raises(NotImplementedError):
-        renderer.render(_brief())
+def test_openrouter_renderer_text_to_video_fallback(tmp_path):
+    # No public media base URL → OpenRouter can't fetch a localhost first frame → text→video.
+    settings = Settings(media_dir=tmp_path, media_public_base_url=None)
+    client = FakeOpenRouterClient()
+    result = OpenRouterRenderer(settings, client=client).render(_brief())
+
+    assert result["status"] == "rendering"
+    assert result["mode"] == "text_to_video"
+    assert result["hero_image_url"].startswith("/media/")
+    assert len(result["shots"]) == 1
+    shot = result["shots"][0]
+    assert shot["image_url"].startswith("/media/") and shot["video_job_id"]
+    # text→video: no first frame was sent; and the image bytes were actually written under media_dir.
+    assert client.video_calls[0]["first_frame_url"] is None
+    assert list(tmp_path.rglob("*.png"))
+
+
+def test_openrouter_renderer_image_to_video_when_public_base_set(tmp_path):
+    # A public base URL → the still is passed as the first frame (image→video).
+    settings = Settings(media_dir=tmp_path, media_public_base_url="https://pub.example")
+    client = FakeOpenRouterClient()
+    result = OpenRouterRenderer(settings, client=client).render(_brief())
+
+    assert result["mode"] == "image_to_video"
+    first_frame = client.video_calls[0]["first_frame_url"]
+    assert first_frame and first_frame.startswith("https://pub.example/media/")
+
+
+def test_openrouter_renderer_needs_a_key_or_client():
+    # Without an injected client and without a key, construction fails fast (rather than at call time).
+    with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):
+        OpenRouterRenderer(Settings(openrouter_api_key=None))

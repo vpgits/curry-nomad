@@ -155,6 +155,29 @@ export interface A2uiSurface {
   blocks: A2uiBlock[];
 }
 
+// The marketing render result (mirrors RenderResult/RenderShot in schemas.py), pushed as the
+// `marketing_render` card by the OpenRouter renderer. Stills (`image_url`) are served by the
+// ops-api at /media (prefix with OPS_API_URL); videos are async OpenRouter jobs the card polls via
+// the /api/render/video proxy until `video_job_id` completes, then streams the result.
+export interface RenderShot {
+  index: number;
+  scene_description: string;
+  t2v_prompt: string;
+  image_url?: string | null;
+  video_job_id?: string | null;
+  error?: string | null;
+}
+
+export interface RenderResult {
+  status: "placeholder" | "rendering" | "rendered" | "cancelled" | "error";
+  mode: "image_to_video" | "text_to_video" | "none";
+  hero_image_url?: string | null;
+  shots: RenderShot[];
+  image_model?: string | null;
+  video_model?: string | null;
+  detail: string;
+}
+
 // Orchestrator graph state surfaced by useStream. Must be a `type` (not an interface) so it
 // satisfies useStream's `Record<string, unknown>` state constraint.
 export type NoraState = {
