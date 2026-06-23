@@ -51,8 +51,14 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-aegra}:${POSTGRES_PASSWORD:-aegra}@postgres:5432/${POSTGRES_DB:-aegra}
       # Single-instance demo: in-process asyncio runs (no Redis service needed).
       REDIS_BROKER_ENABLED: "false"
-      # Keyless locally (no auth handler).
-      AUTH_TYPE: noop
+      # Auth is OFF by default (keyless local dev). Set AUTH_TYPE=custom in .env to enable the
+      # per-operator identity handler (auth.py) — required only for the Google Workspace demo, which
+      # also needs NEXTAUTH_SECRET (the secret the web app signs its session JWTs with).
+      AUTH_TYPE: ${AUTH_TYPE:-noop}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-}
+      # Workspace capability (OFF by default): point Aegra at the MCP server and flip the flag in .env.
+      NORA_WORKSPACE_ENABLED: ${NORA_WORKSPACE_ENABLED:-false}
+      NORA_WORKSPACE_MCP_URL: ${NORA_WORKSPACE_MCP_URL:-http://workspace-mcp:8001}
       # Tracing is opt-in (empty = off). See the Langfuse note at the top of this file.
       OTEL_TARGETS: ${OTEL_TARGETS:-}
       LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-http://host.docker.internal:3001}
@@ -113,6 +119,36 @@ services:
       # Only to ensure the shared image is built first; ops-api is otherwise independent.
       aegra:
         condition: service_started
+
+  # Google Workspace MCP server — backs the optional `workspace` capability. External-OAuth-provider
+  # + stateless mode: it has no token store and runs no OAuth flow itself; it validates the operator's
+  # Google access token (which Nora passes as a bearer per run) and calls Google on their behalf.
+  # Behind the `workspace` compose profile, so the default `docker compose up` stack is unchanged —
+  # start it with `docker compose --profile workspace up`. Best-effort: if it's down, the workspace
+  # capability degrades to a text reply (no hard depends_on from aegra).
+  # NOTE: confirm the exact image/tag + flags against https://workspacemcp.com/docs (override with
+  # WORKSPACE_MCP_IMAGE); build from github.com/taylorwilsdon/google_workspace_mcp if none fits.
+  workspace-mcp:
+    profiles: ["workspace"]
+    image: ${WORKSPACE_MCP_IMAGE:-ghcr.io/taylorwilsdon/google_workspace_mcp:latest}
+    restart: unless-stopped
+    command: ["--transport", "streamable-http", "--permissions", "gmail:send", "calendar:readonly"]
+    environment:
+      PORT: "8001"
+      MCP_ENABLE_OAUTH21: "true"
+      EXTERNAL_OAUTH21_PROVIDER: "true"
+      WORKSPACE_MCP_STATELESS_MODE: "true"
+      # OAuth 2.1 reuses these even in external-provider mode (token validation); read from .env.
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8001/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   web:
     build:
