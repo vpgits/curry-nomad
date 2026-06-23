@@ -8,7 +8,8 @@ that make any of them trustworthy: tools, human-in-the-loop, memory, generative 
 and evaluation.
 
 **Nora** is the operations assistant for **Curry Nomad**, a fictional Sri Lankan spice business.
-One orchestrator routes each request to one of three capabilities that deliberately contrast:
+One orchestrator routes each request to one of three core capabilities that deliberately contrast
+(plus an optional, OFF-by-default fourth, **Workspace**):
 
 - **Analytics — an AGENT.** Answers questions over a bundled SQLite database: writes SQL, runs
   it, and *self-corrects when a query fails*. Open-ended, so it's a hand-built tool loop.
@@ -18,6 +19,11 @@ One orchestrator routes each request to one of three capabilities that deliberat
 - **Operations / Routing — DETERMINISTIC SERVICES.** Inventory, orders, and an NP-hard delivery-route
   optimizer, behind a REST API the agent merely *calls*. The "**limits of agentic development**"
   pillar — the rules live in code, not a prompt, so the agent can't oversell or invent a route.
+- **Workspace — an AGENT over EXTERNAL tools via MCP** *(optional, OFF by default).* Acts on the
+  logged-in operator's **own Google account** (Gmail/Calendar) through the self-hosted Google
+  Workspace **MCP** server — an agent over a *real external system*, gated by **OAuth**. Enable with
+  `NORA_WORKSPACE_ENABLED=true` + `uv sync --extra workspace`; see CLAUDE.md for the two-plane auth
+  model (per-operator identity + a separate incremental Workspace grant).
 
 Each capability surfaces its result as **native generative UI**: typed cards pushed over LangGraph's
 `push_ui_message` channel (an analytics dashboard, the marketing storyboard/timeline/critique, a
@@ -121,6 +127,7 @@ semantic Store even when the chat model is Anthropic — or point it at another 
 | **Memory: checkpointer + semantic Store** | `memory.py`, read via `runtime.store` in both | Orchestrator + HITL |
 | **Limits of agentic dev — deterministic services** | `operations/services.py` (business rules), `operations/api.py` | Operations |
 | **NP-hard delivery routing (no LLM)** | `operations/routing.py` (nearest-neighbor + 2-opt) | Operations |
+| **Agent over external tools (MCP) + OAuth** *(optional)* | `workspace/graph.py`, `auth.py`, web `app/api/google/*` | Workspace |
 | **Native generative UI (`push_ui_message`)** | `orchestrator.py` / `marketing` cards → web `LoadExternalComponent` | Generative UI |
 | **Dynamic-schema UI (LLM authors the UI)** | `a2ui_studio.py`, `schemas.py` `A2uiSurface`, web `/studio` | Generative UI |
 | **Observability (structlog + LangSmith / Langfuse)** | `observability.py`, `docker-compose.langfuse.yml` | Observability + evals (1:05–1:25) |

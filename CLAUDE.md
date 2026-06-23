@@ -5,8 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A LangGraph / LangChain **1.x** teaching artifact. "Nora" is the operations assistant for a
-fictional Sri Lankan spice business. One **orchestrator** routes each request to one of three
-capabilities that deliberately contrast:
+fictional Sri Lankan spice business. One **orchestrator** routes each request to one of three core
+capabilities that deliberately contrast (plus an optional, OFF-by-default fourth, `workspace`):
 
 - **Analytics — an AGENT** (`analytics/`): a hand-written tool loop that writes SQL over a
   bundled SQLite DB and *self-corrects when a query fails*.
@@ -18,8 +18,14 @@ capabilities that deliberately contrast:
   `routing` capability merely *calls*. This is the deliberate "**limits of agentic development**"
   pillar — the rules live in code, not a prompt, so the agent literally cannot oversell or invent
   a route.
+- **Workspace — an AGENT over EXTERNAL tools via MCP** (`workspace/`, *optional, OFF by default*):
+  a tool loop (like analytics) that acts on the **logged-in operator's own Google account**
+  (Gmail/Calendar) through the self-hosted Google Workspace **MCP** server. The contrast with
+  analytics: an agent over a *real external system reached via MCP* and gated by **OAuth**, not an
+  in-process DB. Enable with `NORA_WORKSPACE_ENABLED=true` + `uv sync --extra workspace`; see the
+  "Workspace capability" architecture note below.
 
-A fourth cross-cutting concern is **native generative UI**: capabilities push typed UI cards over
+A cross-cutting concern is **native generative UI**: capabilities push typed UI cards over
 LangGraph's `push_ui_message` channel (analytics dashboard, marketing storyboard/timeline/critique,
 the `route_map`), which the web client renders via `LoadExternalComponent`. There is no CopilotKit —
 the chat is `useStream` → Aegra, and the gen-UI is push-based and native.
@@ -34,8 +40,10 @@ editing: keep patterns explicit and the explanatory docstrings/comments intact.
 Monorepo with two sibling apps under `apps/`:
 - `apps/nora/` — the Python backend (package `nora` under `apps/nora/src/nora/`, plus `tests/`,
   `evals/`, `scripts/`). Subpackages: `analytics/` (the agent), `marketing/` (the workflow),
-  `operations/` (the deterministic ops backend + REST API), `services/` (ports & adapters), plus
-  `orchestrator.py` (router) and `a2ui_studio.py` (a second graph: the dynamic-schema gen-UI showcase).
+  `operations/` (the deterministic ops backend + REST API), `workspace/` (the optional Google
+  Workspace MCP agent), `services/` (ports & adapters), plus `orchestrator.py` (router),
+  `auth.py` (the optional Aegra custom-auth handler for per-operator identity), and `a2ui_studio.py`
+  (a second graph: the dynamic-schema gen-UI showcase).
 - `apps/web/` — the Next.js frontend (Agent Protocol client; renders the native gen-UI cards).
 
 It's a **single root Python package**: `pyproject.toml`, `uv.lock`, and the `aegra.json`
@@ -158,6 +166,28 @@ the writable DB deterministically with `python -m nora.operations.seed` (fixed R
 plants a few low-stock SKUs and a zig-zag delivery set so the demos have signal). Like `services/`,
 it's **ports & adapters**: `operations/interfaces.py:OperationsStore` is a Protocol, so a Postgres
 adapter is wiring-only.
+
+**Workspace capability (`workspace/`, optional — OFF by default).** An agent that acts on the
+**logged-in operator's own Google account** (Gmail/Calendar) via the self-hosted Google Workspace
+**MCP** server — the contrast with the in-process analytics agent (a tool loop over a *real external
+system reached through MCP*, gated by OAuth) and with deterministic `routing`. Gated by
+`settings.workspace_enabled` so the **base install never imports `langchain-mcp-adapters`** and the
+offline suite stays green; the orchestrator wires a stub "connect" node when off. It's an **imperative
+orchestrator node** (like `marketing`, not a compiled subgraph node like `analytics`) because the
+tool set is **per-run, token-dependent**: `build_workspace_agent(...)`'s injectable `tools_provider`
+(the analogue of routing's `route_planner`) mints a **fresh `MultiServerMCPClient` per run** with the
+operator's bearer token in the headers — the documented dodge for `langchain-mcp-adapters`' lack of
+per-request token swapping. Errors mirror analytics: a narrow `handle_workspace_error(ToolException)`
+becomes a ToolMessage for self-correction (don't broaden the catch). **Two auth planes, kept
+separate:** *identity* (Plane 1) is per-operator — Aegra `AUTH_TYPE=custom` + `auth.py` verifies the
+NextAuth-minted HS256 session JWT (`NEXTAUTH_SECRET`, never a `Settings` field) so threads scope per
+user; *authorization* (Plane 2) is a **separate, incremental** Google grant (the web app's
+`/api/google/{connect,callback,token,status}`), and the access token rides **per-run in
+`config.configurable.google_access_token`** (read in `orchestrator.py:workspace`; a `# TODO(prod)`
+notes that this lands in checkpoints — production would carry it as a JWT claim instead). Demo-only:
+publish the Google OAuth app in **Testing** mode (≤100 test users; refresh tokens expire in 7 days, so
+token storage is just a session-scoped encrypted cookie). Run it with `uv sync --extra workspace`,
+`NORA_WORKSPACE_ENABLED=true`, `AUTH_TYPE=custom`, and `docker compose --profile workspace up`.
 
 **Generative UI is native and push-based (`push_ui_message`).** Capabilities attach typed UI cards
 by calling `push_ui_message("<name>", payload, message=...)`; the web client renders them via
