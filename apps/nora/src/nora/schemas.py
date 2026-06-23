@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 class RouteDecision(BaseModel):
     """The orchestrator's classification of an incoming request."""
 
-    capability: Literal["analytics", "marketing", "routing", "clarify"]
+    capability: Literal["analytics", "marketing", "routing", "workspace", "clarify"]
     reason: str
     product_hint: str | None = None  # product name/id if a marketing request references one
 

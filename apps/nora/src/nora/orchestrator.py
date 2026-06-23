@@ -37,6 +37,8 @@ ROUTER_INSTRUCTIONS = (
     "- 'marketing': requests to CREATE or GENERATE a video ad / reel / creative for a product.\n"
     "- 'routing': requests to PLAN, OPTIMIZE, or SHOW today's delivery route / the delivery map "
     "(which stops, in what order, how far, dispatch the van).\n"
+    "- 'workspace': requests to ACT on the operator's own Google account — send or draft an email "
+    "(Gmail), or read/create a calendar event.\n"
     "- 'clarify': ambiguous, or neither of the above.\n\n"
     "For a marketing request that references a product (by name, or 'it'/'that one' pointing "
     "at a product discussed earlier), set product_hint to that product's name. Always give a "
@@ -139,6 +141,7 @@ def build_orchestrator(
     marketing_graph=None,
     dashboard_model=None,
     route_planner=None,
+    workspace_agent=None,
     checkpointer=None,
     store=None,
 ):
@@ -180,10 +183,18 @@ def build_orchestrator(
         # one-line swap.
         def route_planner() -> dict:
             return _plan_route_via_ops_api(settings.ops_api_url)
+    if workspace_agent is None and settings.workspace_enabled:
+        # Build the workspace capability ONLY when the flag is on — the import (and thus
+        # langchain-mcp-adapters) is deferred so the base install stays dependency-light and the
+        # offline suite (flag off) never needs the optional extra. When off, `workspace_agent` stays
+        # None and the node degrades to a friendly "connect" reply (see below).
+        from nora.workspace.graph import build_workspace_agent as _build_workspace_agent
+
+        workspace_agent = _build_workspace_agent(settings=settings)
 
     def route(
         state: OrchestratorState,
-    ) -> Command[Literal["analytics", "marketing", "routing", "clarify"]]:
+    ) -> Command[Literal["analytics", "marketing", "routing", "workspace", "clarify"]]:
         classifier = router_model.with_structured_output(RouteDecision)
         decision: RouteDecision = classifier.invoke(
             [SystemMessage(content=ROUTER_INSTRUCTIONS), *state["messages"]]
@@ -283,6 +294,41 @@ def build_orchestrator(
         push_ui_message("route_map", plan, message=final)
         return {"messages": [final]}
 
+    def workspace(state: OrchestratorState, config) -> dict:
+        # Act on the operator's own Google account (Gmail/Calendar) via the Workspace MCP server —
+        # an agentic tool loop (the deliberate contrast with the deterministic `routing` node). Gated:
+        # needs the capability flag ON (so `workspace_agent` exists) AND a per-run Google access token
+        # the web client passes in `config.configurable`. Missing either → a friendly "connect" reply,
+        # never a crash (mirrors routing's ops-down degrade). Passing `config` through lets the inner
+        # agent's tool steps + streamed answer flow into the thread, like the marketing subgraph.
+        token = (config or {}).get("configurable", {}).get("google_access_token")
+        # TODO(prod): the access token rides in run config, which the checkpointer persists. For
+        # production, carry it as a claim in the Aegra auth JWT and read it from the authenticated
+        # user so it never lands in state. Fine for a Testing-mode demo with short-lived tokens.
+        if workspace_agent is None or not token:
+            return {
+                "messages": [
+                    AIMessage(
+                        content="Connect your Google Workspace and I can act on your Gmail and "
+                        "Calendar — use the “Connect Google Workspace” button, then ask me again."
+                    )
+                ]
+            }
+        try:
+            new_messages = workspace_agent(state["messages"], access_token=token, config=config)
+        except Exception as exc:  # noqa: BLE001 — MCP/transport failure → text reply, never crash
+            log.info("workspace.skipped", error=str(exc))
+            return {
+                "messages": [
+                    AIMessage(
+                        content="I couldn't reach your Google Workspace just now — is the connection "
+                        "still active? Try reconnecting and asking again."
+                    )
+                ]
+            }
+        log.info("workspace.completed", new_messages=len(new_messages))
+        return {"messages": new_messages}
+
     def clarify(state: OrchestratorState) -> dict:
         return {
             "messages": [
@@ -308,6 +354,9 @@ def build_orchestrator(
     # Routing: a deterministic ops capability (no LLM) — plans the delivery route via the ops API and
     # pushes a route_map generative-UI card.
     builder.add_node("routing", routing)
+    # Workspace: an agentic tool loop over the Google Workspace MCP server — acts on the operator's
+    # own Gmail/Calendar. The deliberate contrast with `routing` (agent vs deterministic service).
+    builder.add_node("workspace", workspace)
     builder.add_node("clarify", clarify)
     builder.add_edge(START, "route")
     # route dispatches via Command(goto=...); analytics flows through its dashboard, then each ends.
@@ -315,6 +364,7 @@ def build_orchestrator(
     builder.add_edge("analytics_dashboard", END)
     builder.add_edge("marketing", END)
     builder.add_edge("routing", END)
+    builder.add_edge("workspace", END)
     builder.add_edge("clarify", END)
 
     return builder.compile(checkpointer=checkpointer, store=store)

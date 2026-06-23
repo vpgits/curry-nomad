@@ -68,6 +68,19 @@ class Settings(BaseSettings):
     # app uses), so the writable ops DB stays single-owner. Override with NORA_OPS_API_URL.
     ops_api_url: str = "http://localhost:8000"
 
+    # --- Google Workspace capability (optional; OFF by default) ---
+    # The `workspace` capability is an agent that acts on the logged-in operator's own Google account
+    # (Gmail/Calendar) through the self-hosted Google Workspace MCP server. It's gated OFF so the base
+    # install stays dependency-light (no langchain-mcp-adapters) and the offline suite/teaching paths
+    # are untouched; turn it on with NORA_WORKSPACE_ENABLED=true (and run `uv sync --extra workspace`).
+    # Secrets (Google OAuth client id/secret, NEXTAUTH_SECRET) are NOT Settings fields — they're read
+    # from the environment by the web layer + the Aegra auth handler, like every other provider key.
+    workspace_enabled: bool = False  # master flag (NORA_WORKSPACE_ENABLED)
+    workspace_mcp_url: str = "http://localhost:8001"  # the MCP server's streamable-http endpoint
+    # Informational echo of the scopes the demo grants; the real enforcement is the MCP server's
+    # `--permissions` flag (and the OAuth consent the operator approves).
+    workspace_permissions: str = "gmail:send calendar:readonly"
+
     # --- Analytics tool guards ---
     max_sql_rows: int = 200  # LIMIT cap injected into run_sql
     sql_timeout_s: float = 5.0  # statement timeout
