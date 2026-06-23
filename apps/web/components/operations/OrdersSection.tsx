@@ -317,7 +317,7 @@ export function OrdersSection() {
                   <Input
                     value={address}
                     onChange={(e) => setAddress(e.target.value)}
-                    placeholder="12 Galle Rd, Colombo 03"
+                    placeholder="No. 215, Galle Road, Kollupitiya, Colombo 00300"
                   />
                 </label>
               </div>

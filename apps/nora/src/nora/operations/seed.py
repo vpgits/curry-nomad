@@ -1,6 +1,7 @@
 """Deterministically build the writable operations DB from the read-only business DB.
 
-Same discipline as `nora.data.seed`: a fixed RNG seed and zero wall-clock calls, so re-running
+Same discipline as `nora.data.seed`: deterministic by construction — zero wall-clock calls and no
+RNG (delivery coordinates are hand-picked to match each address, not jittered) — so re-running
 produces the same DB byte-for-byte. The read-only `curry_nomad.db` is the source of truth for the
 *reference* data (products, customers) — we snapshot a subset into this DB so it's self-contained
 — and the source of *initial stock*, derived from each product's real sales volume so the numbers
@@ -12,22 +13,19 @@ PLANTED TRUTHS (so the demo has signal):
   - Initial on_hand ≈ 1.5 months of historical demand; reorder points ≈ half a month.
   - A few SKUs (White Pepper, Green Cardamom, Cloves gift tin, Goraka) are deliberately seeded
     *below* their reorder point, so `/stock/low` is non-empty out of the box.
-  - Eight pending deliveries are seeded across local cities in a deliberately zig-zag order, so a
-    naive "visit them as listed" route is clearly longer than the optimized one — the routing win
-    is visible immediately.
+  - Eight pending deliveries — each a *complete* street address pinned to its real (lat, lng) — are
+    seeded across local cities in a deliberately zig-zag order, so a naive "visit them as listed"
+    route is clearly longer than the optimized one — the routing win is visible immediately.
 """
 
 from __future__ import annotations
 
-import random
 import sqlite3
 from pathlib import Path
 
 from nora.config import get_settings
 from nora.observability import get_logger
 from nora.operations import geo, schema
-
-SEED = 42
 
 # SKUs deliberately seeded below their reorder point (for the low-stock demo). Disjoint from the
 # SKUs reserved by the seeded orders below, so reserved stays 0 and they read as cleanly "low".
@@ -36,17 +34,20 @@ _PLANTED_LOW = ("PEP-WHT-200", "CAR-GRN-050", "CIN-TIN-150", "GOR-DRY-100")
 # SKUs the seeded orders reserve (top sellers with deep stock, so reservations are always safe).
 _RESERVE_SKUS = ("CUR-RST-200", "CIN-ALBA-100")
 
-# Eight pending deliveries, (city, address), intentionally in a zig-zag order so the naive
-# "as-listed" tour is long and the optimizer has real work to do.
+# Eight pending deliveries, intentionally in a zig-zag order so the naive "as-listed" tour is long
+# and the optimizer has real work to do. Each row is a *complete* street address (house number,
+# street, suburb, city, postcode) pinned to its real (lat, lng) — coordinates are hand-picked to
+# land on the actual neighbourhood (no jitter), so the map pins are honest and the route geometry
+# is real. Fields: (city, address, lat, lng).
 _SEED_DELIVERIES = [
-    ("Colombo", "12 Galle Rd, Colombo 03"),
-    ("Jaffna", "5 Hospital Rd, Jaffna"),
-    ("Galle", "8 Lighthouse St, Galle Fort"),
-    ("Kandy", "21 Peradeniya Rd, Kandy"),
-    ("Negombo", "3 Lewis Pl, Negombo"),
-    ("Matara", "14 Beach Rd, Matara"),
-    ("Colombo", "90 Marine Dr, Colombo 04"),
-    ("Kandy", "7 Temple St, Kandy"),
+    ("Colombo", "No. 215, Galle Road, Kollupitiya, Colombo 00300", 6.9085, 79.8525),
+    ("Jaffna", "No. 40, Hospital Road, Chundikuli, Jaffna 40000", 9.6647, 80.0118),
+    ("Galle", "No. 8, Lighthouse Street, Galle Fort, Galle 80000", 6.0263, 80.2172),
+    ("Kandy", "No. 121, Peradeniya Road, Kandy 20000", 7.2889, 80.6285),
+    ("Negombo", "No. 3, Lewis Place, Negombo 11500", 7.2112, 79.8372),
+    ("Matara", "No. 14, Beach Road, Matara 81000", 5.9466, 80.5453),
+    ("Colombo", "No. 90, Marine Drive, Bambalapitiya, Colombo 00400", 6.8798, 79.8543),
+    ("Kandy", "No. 7, Temple Street, Kandy 20000", 7.2942, 80.6411),
 ]
 
 
@@ -119,7 +120,6 @@ def _seed_stock(
 
 def _seed_orders_and_deliveries(
     conn: sqlite3.Connection,
-    rng: random.Random,
     products: list[dict],
     customers: list[dict],
     now: str,
@@ -129,7 +129,7 @@ def _seed_orders_and_deliveries(
     by_sku = {p["sku"]: p for p in products}
     local_customers = [c for c in customers if c["city"] in geo.LOCAL_CITIES]
 
-    for i, (city, address) in enumerate(_SEED_DELIVERIES):
+    for i, (city, address, lat, lng) in enumerate(_SEED_DELIVERIES):
         customer = local_customers[i % len(local_customers)]
         product = by_sku[_RESERVE_SKUS[i % len(_RESERVE_SKUS)]]
         qty = 2
@@ -162,9 +162,6 @@ def _seed_orders_and_deliveries(
             (product["product_id"], stock["on_hand"], f"order #{order_id}", f"order #{order_id}", now),
         )
 
-        base_lat, base_lng = geo.coords_for_city(city)
-        lat = round(base_lat + rng.uniform(-0.02, 0.02), 6)  # jitter within the city
-        lng = round(base_lng + rng.uniform(-0.02, 0.02), 6)
         conn.execute(
             "INSERT INTO deliveries "
             "(order_id, address, city, lat, lng, status, route_id, window_start, window_end) "
@@ -185,7 +182,6 @@ def build(ops_db_path: Path, source_db_path: Path | None = None) -> Path:
         ops_db_path.unlink()  # fresh build → byte-for-byte reproducible
 
     products, customers, sold = _read_source(source_db_path)
-    rng = random.Random(SEED)
 
     conn = sqlite3.connect(ops_db_path)
     conn.row_factory = sqlite3.Row  # name-indexable rows for the reserve/stock reads below
@@ -194,7 +190,7 @@ def build(ops_db_path: Path, source_db_path: Path | None = None) -> Path:
         conn.execute("PRAGMA foreign_keys = ON")
         _seed_reference(conn, products, customers)
         _seed_stock(conn, products, sold, now)
-        _seed_orders_and_deliveries(conn, rng, products, customers, now)
+        _seed_orders_and_deliveries(conn, products, customers, now)
         conn.commit()
     finally:
         conn.close()

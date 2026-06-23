@@ -3,7 +3,7 @@
 import "leaflet/dist/leaflet.css";
 import { useEffect } from "react";
 import L from "leaflet";
-import { MapContainer, Marker, Polyline, TileLayer, useMap } from "react-leaflet";
+import { MapContainer, Marker, Polyline, TileLayer, Tooltip, useMap } from "react-leaflet";
 
 import type { RouteStop } from "@/lib/ops-types";
 
@@ -64,9 +64,19 @@ export default function RouteMapLeaflet({
           positions={tour}
           pathOptions={{ color: INK, weight: 2, dashArray: "5 6", opacity: 0.6 }}
         />
-        <Marker position={depot} icon={pinIcon("D", true)} />
+        <Marker position={depot} icon={pinIcon("D", true)}>
+          <Tooltip direction="top" offset={[0, -12]}>
+            <span className="font-semibold">Depot</span> · Colombo warehouse
+          </Tooltip>
+        </Marker>
         {stops.map((s) => (
-          <Marker key={s.delivery_id} position={[s.lat, s.lng]} icon={pinIcon(String(s.seq), false)} />
+          <Marker key={s.delivery_id} position={[s.lat, s.lng]} icon={pinIcon(String(s.seq), false)}>
+            <Tooltip direction="top" offset={[0, -12]}>
+              <span className="font-semibold">Stop {s.seq}</span> · #{s.order_id}
+              <br />
+              {s.address}
+            </Tooltip>
+          </Marker>
         ))}
         <FitBounds points={tour} />
       </MapContainer>
