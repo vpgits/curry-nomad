@@ -11,7 +11,10 @@ import { ConceptPicker } from "@/components/ConceptPicker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { MarketingInterrupt } from "@/lib/types";
+import { WORKSPACE_ENABLED } from "@/lib/config";
+import { getWorkspaceAccessToken } from "@/lib/workspace-client";
 import { useStreamContext } from "@/providers/Stream";
+import { WorkspaceConnect } from "@/components/workspace/workspace-connect";
 import { AskNoraModeLane } from "./AskNoraModeLane";
 import { AssistantMessage, NoraAvatar } from "./messages/ai";
 import { HumanMessage } from "./messages/human";
@@ -20,6 +23,9 @@ const SUGGESTIONS = [
   "What was our best-selling product in Colombo last quarter?",
   "Make a 30s video ad for it",
   "What's the refund rate on blends?",
+  ...(WORKSPACE_ENABLED
+    ? ["Email priya@example.com that the cloves shipment is delayed two days"]
+    : []),
 ];
 
 export function Thread() {
@@ -36,10 +42,14 @@ export function Thread() {
   const lastIsHuman = messages.length > 0 && messages[messages.length - 1].type === "human";
   const briefsHref = threadId ? `/briefs?threadId=${threadId}` : "/briefs";
 
-  const send = (text: string) => {
+  const send = async (text: string) => {
     const content = text.trim();
     if (!content) return;
     setInput("");
+    // Workspace capability: when enabled, fetch the operator's current Google access token and pass
+    // it per-run in config.configurable. The backend `workspace` node reads it to act on Gmail/
+    // Calendar; other capabilities ignore it. Null (not connected) → the node prompts to connect.
+    const googleToken = WORKSPACE_ENABLED ? await getWorkspaceAccessToken() : null;
     stream.submit(
       { messages: [{ type: "human", content }] },
       {
@@ -47,6 +57,9 @@ export function Thread() {
         // Stream the analytics agent subgraph's messages too — its run_sql steps and the final
         // answer flow in live (the subgraph is a real node in the orchestrator graph).
         streamSubgraphs: true,
+        ...(googleToken
+          ? { config: { configurable: { google_access_token: googleToken } } }
+          : {}),
         optimisticValues: (prev) => ({
           ...prev,
           messages: [
@@ -76,11 +89,12 @@ export function Thread() {
       />
 
       <footer className="shrink-0 border-t bg-background">
+        <WorkspaceConnect />
         <form
           className="mx-auto flex max-w-3xl items-center gap-2.5 px-[26px] py-4"
           onSubmit={(e) => {
             e.preventDefault();
-            send(input);
+            void send(input);
           }}
         >
           <Input

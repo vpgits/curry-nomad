@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import { IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
+import { SessionProvider } from "next-auth/react";
 import { Toaster } from "sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThreadProvider } from "@/providers/Thread";
@@ -34,6 +35,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       suppressHydrationWarning
     >
       <body className="min-h-screen bg-background text-foreground antialiased">
+        {/* SessionProvider (NextAuth) wraps everything so useSession works in the Stream provider and
+            the workspace "Connect" affordance. Inert when auth isn't configured (session = null). */}
+        <SessionProvider>
         <NuqsAdapter>
           <TooltipProvider delayDuration={0}>
             {/* ThreadProvider (Aegra thread history) + the nuqs Suspense boundary + StreamProvider
@@ -49,6 +53,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </TooltipProvider>
         </NuqsAdapter>
         <Toaster theme="light" richColors position="top-center" />
+        </SessionProvider>
       </body>
     </html>
   );

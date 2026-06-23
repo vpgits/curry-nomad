@@ -8,6 +8,7 @@ import {
   type UIMessage,
 } from "@langchain/langgraph-sdk/react-ui";
 import { useQueryState } from "nuqs";
+import { useSession } from "next-auth/react";
 import { toast } from "sonner";
 
 import { API_URL, ASSISTANT_ID } from "@/lib/config";
@@ -28,10 +29,15 @@ export function StreamProvider({ children }: { children: ReactNode }) {
   // threadId lives in the URL so a conversation is shareable/bookmarkable; null = a fresh thread.
   const [threadId, setThreadId] = useQueryState("threadId");
   const { getThreads, setThreads } = useThreads();
+  // When the operator is signed in, attach their minted Aegra token so the backend (AUTH_TYPE=custom)
+  // identifies them and scopes threads. Omitted when signed out / auth off → the keyless path is unchanged.
+  const { data: session } = useSession();
+  const aegraToken = session?.aegraToken;
 
   const stream = useTypedStream({
     apiUrl: API_URL,
     assistantId: ASSISTANT_ID,
+    ...(aegraToken ? { defaultHeaders: { Authorization: `Bearer ${aegraToken}` } } : {}),
     threadId: threadId ?? null,
     messagesKey: "messages",
     // Load prior messages + per-message checkpoint metadata (needed for edit/regenerate branching).

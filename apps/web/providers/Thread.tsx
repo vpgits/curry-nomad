@@ -12,6 +12,7 @@ import {
 import type { Thread } from "@langchain/langgraph-sdk";
 
 import { API_URL, ASSISTANT_ID, STUDIO_ASSISTANT_ID } from "@/lib/config";
+import { aegraAuthHeaders } from "@/lib/auth-headers";
 import { createClient } from "./client";
 
 interface ThreadContextType {
@@ -33,7 +34,7 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
   const getThreads = useCallback(async (): Promise<Thread[]> => {
     setThreadsLoading(true);
     try {
-      const client = createClient(API_URL);
+      const client = createClient(API_URL, undefined, await aegraAuthHeaders());
       const [main, studio] = await Promise.all([
         client.threads.search({ metadata: { graph_id: ASSISTANT_ID }, limit: 100 }),
         client.threads.search({ metadata: { graph_id: STUDIO_ASSISTANT_ID }, limit: 100 }),

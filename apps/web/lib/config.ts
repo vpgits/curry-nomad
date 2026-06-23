@@ -12,3 +12,7 @@ export const STUDIO_ASSISTANT_ID =
 // separate FastAPI app — `uv run --extra operations uvicorn nora.operations.api:app --port 8000`.
 // The /inventory page talks to it directly over REST; no agent / Aegra involved.
 export const OPS_API_URL = process.env.NEXT_PUBLIC_OPS_API_URL ?? "http://localhost:8000";
+
+// Gates the optional Google Workspace capability's UI (the "Connect Google Workspace" affordance and
+// the per-run token fetch). Mirrors the backend's NORA_WORKSPACE_ENABLED flag; OFF by default.
+export const WORKSPACE_ENABLED = process.env.NEXT_PUBLIC_WORKSPACE_ENABLED === "true";
