@@ -19,6 +19,7 @@ suite stays green (the capability is OFF by default; tests inject a fake provide
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Sequence
 
 from langchain.chat_models import init_chat_model
@@ -69,8 +70,6 @@ def _make_mcp_tools_provider(settings: Settings) -> ToolsProvider:
     imported lazily so the base install (capability OFF) never needs the optional extra."""
 
     def provider(*, access_token: str) -> Sequence[BaseTool]:
-        import asyncio
-
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
         client = MultiServerMCPClient(
@@ -135,7 +134,12 @@ def build_workspace_agent(
             _model = init_chat_model(settings.model, temperature=0, streaming=True)
         tools = provider(access_token=access_token)
         agent = _compile_loop(_model, tools)
-        result = agent.invoke({"messages": messages}, config)
+        # MCP tools (langchain-mcp-adapters) are ASYNC-ONLY — a sync `.invoke()` raises "StructuredTool
+        # does not support sync invocation". So drive the loop with `ainvoke`, which executes tools via
+        # their async path. We're in a sync graph node running off the event loop (Aegra runs sync
+        # nodes in a worker thread; the CLI/tests have no running loop), so a one-shot `asyncio.run` is
+        # safe — the same bridge the tools_provider uses for `get_tools()`.
+        result = asyncio.run(agent.ainvoke({"messages": messages}, config))
         # Return only the tail the agent appended (add_messages keeps input messages at the front by
         # id), so we don't re-emit the operator's prompt into the top-level thread.
         return list(result["messages"][len(messages) :])

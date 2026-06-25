@@ -76,7 +76,8 @@ class Settings(BaseSettings):
     # Secrets (Google OAuth client id/secret, NEXTAUTH_SECRET) are NOT Settings fields — they're read
     # from the environment by the web layer + the Aegra auth handler, like every other provider key.
     workspace_enabled: bool = False  # master flag (NORA_WORKSPACE_ENABLED)
-    workspace_mcp_url: str = "http://localhost:8001"  # the MCP server's streamable-http endpoint
+    # The MCP server's streamable-http endpoint — note the `/mcp` path (the bare host returns 405).
+    workspace_mcp_url: str = "http://localhost:8001/mcp"
     # Informational echo of the scopes the demo grants; the real enforcement is the MCP server's
     # `--permissions` flag (and the OAuth consent the operator approves).
     workspace_permissions: str = "gmail:send docs:full sheets:full tasks:full drive:readonly"

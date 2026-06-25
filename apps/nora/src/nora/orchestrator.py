@@ -37,8 +37,9 @@ ROUTER_INSTRUCTIONS = (
     "- 'marketing': requests to CREATE or GENERATE a video ad / reel / creative for a product.\n"
     "- 'routing': requests to PLAN, OPTIMIZE, or SHOW today's delivery route / the delivery map "
     "(which stops, in what order, how far, dispatch the van).\n"
-    "- 'workspace': requests to ACT on the operator's own Google account — send or draft an email "
-    "(Gmail), or read/create a calendar event.\n"
+    "- 'workspace': requests to ACT on the operator's own Google account — draft or send an email "
+    "(Gmail), add or list tasks (Google Tasks), create or edit a Google Doc or Sheet, or find/read "
+    "a file in Google Drive.\n"
     "- 'clarify': ambiguous, or neither of the above.\n\n"
     "For a marketing request that references a product (by name, or 'it'/'that one' pointing "
     "at a product discussed earlier), set product_hint to that product's name. Always give a "
@@ -326,7 +327,18 @@ def build_orchestrator(
                     )
                 ]
             }
-        log.info("workspace.completed", new_messages=len(new_messages))
+        # Tag the turn with a gen-UI marker so the chat shows the "Workspace agent" badge and a
+        # compact summary of the Google tools Nora used. Best-effort, like the other cards.
+        tools_used = [
+            tc.get("name")
+            for m in new_messages
+            for tc in (getattr(m, "tool_calls", None) or [])
+            if tc.get("name")
+        ]
+        final = next((m for m in reversed(new_messages) if isinstance(m, AIMessage)), None)
+        if final is not None:
+            push_ui_message("workspace_actions", {"tools": tools_used}, message=final)
+        log.info("workspace.completed", new_messages=len(new_messages), tools=len(tools_used))
         return {"messages": new_messages}
 
     def clarify(state: OrchestratorState) -> dict:

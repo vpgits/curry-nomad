@@ -72,13 +72,21 @@ async def authenticate(headers) -> dict:
         return {"identity": "anonymous", "display_name": "", "is_authenticated": True}
     secret = os.environ.get("NEXTAUTH_SECRET")
     if not secret:
-        # Misconfiguration: AUTH_TYPE=custom but no signing secret. Fail loud rather than admit
+        # Misconfiguration: AUTH_TYPE=custom but no signing secret. Fail loud (500) rather than admit
         # everyone — silently accepting all callers is worse than no auth at all.
-        raise Exception("NEXTAUTH_SECRET is not set; cannot verify session tokens")
+        raise Auth.exceptions.HTTPException(
+            status_code=500, detail="NEXTAUTH_SECRET is not configured"
+        )
     token = _bearer(headers)
     if not token:
-        raise Exception("Authentication required: missing bearer token")
+        # Raise the SDK's typed exception so Aegra returns a clean 401. A bare Exception is caught as
+        # an internal error and surfaces to the client as the opaque "Authentication system error".
+        raise Auth.exceptions.HTTPException(status_code=401, detail="Missing bearer token")
     try:
         return verify_session_token(token, secret)
+    except Auth.exceptions.HTTPException:
+        raise
     except Exception as exc:  # invalid/expired signature, or no subject → reject
-        raise Exception(f"Invalid session token: {exc}") from exc
+        raise Auth.exceptions.HTTPException(
+            status_code=401, detail=f"Invalid session token: {exc}"
+        ) from exc

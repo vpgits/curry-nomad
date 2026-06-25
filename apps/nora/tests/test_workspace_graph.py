@@ -15,9 +15,10 @@ from __future__ import annotations
 import sys
 
 from langchain_core.messages import HumanMessage
-from langchain_core.tools import tool
+from langchain_core.tools import StructuredTool, tool
 from langgraph.checkpoint.memory import InMemorySaver
 
+from nora.config import Settings
 from nora.orchestrator import build_orchestrator
 from nora.schemas import RouteDecision
 from nora.workspace.graph import build_workspace_agent
@@ -50,10 +51,42 @@ class RecordingToolsProvider:
         return [send_email]
 
 
+class AsyncOnlyToolsProvider:
+    """Like `RecordingToolsProvider`, but its `send_email` is a **coroutine-only** `StructuredTool` —
+    a faithful stand-in for a real MCP tool, which `langchain-mcp-adapters` exposes with no sync
+    implementation. Calling `.invoke()` on it raises `NotImplementedError: StructuredTool does not
+    support sync invocation` (the production failure), while `.ainvoke()` works. This is what locks in
+    the `asyncio.run(agent.ainvoke(...))` fix: a regression to a sync `agent.invoke(...)` would drive
+    the tool synchronously and break, where the sync `@tool` in `RecordingToolsProvider` would not."""
+
+    def __init__(self):
+        self.access_tokens: list[str] = []
+        self.sent: list[dict] = []
+
+    def __call__(self, *, access_token: str):
+        self.access_tokens.append(access_token)
+        sent = self.sent
+
+        async def send_email(to: str, body: str) -> str:
+            sent.append({"to": to, "body": body})
+            return f"sent to {to}"
+
+        return [
+            StructuredTool.from_function(
+                coroutine=send_email,
+                name="send_email",
+                description="Send an email on the operator's behalf.",
+            )
+        ]
+
+
 def _workspace_orch(workspace_agent):
     """Orchestrator wired to route to `workspace`, with stubbed analytics/marketing (never reached)
     so no provider key is needed — the workspace analogue of `_routing_orch`."""
     return build_orchestrator(
+        # Pin workspace_enabled=False (an explicit kwarg overrides any local .env) so the flag-off
+        # default-build path is deterministic regardless of the developer's NORA_WORKSPACE_ENABLED.
+        settings=Settings(workspace_enabled=False),
         router_model=ScriptedStructuredModel(
             {RouteDecision: [RouteDecision(capability="workspace", reason="email")]}
         ),
@@ -91,6 +124,37 @@ def test_workspace_runs_the_tool_loop_with_the_operator_token():
     assert provider.sent == [
         {"to": "priya@example.com", "body": "The cloves shipment is delayed two days."}
     ]  # the *real* ToolNode executed the tool the model chose
+    assert "Sent the email to Priya" in result["messages"][-1].content
+
+
+def test_workspace_loop_drives_async_only_mcp_tools():
+    """Regression guard for the `asyncio.run(agent.ainvoke(...))` fix: MCP tools are coroutine-only,
+    so the loop MUST run on the async path. A revert to a sync `agent.invoke(...)` would raise
+    `NotImplementedError: StructuredTool does not support sync invocation` (it isn't a `ToolException`,
+    so `handle_workspace_error` can't absorb it) — the tool would never run and `sent` would stay empty."""
+    model = ScriptedChatModel(
+        [
+            ai_tool_call(
+                "send_email",
+                {"to": "priya@example.com", "body": "The cloves shipment is delayed two days."},
+                "call-1",
+            ),
+            ai_final("Sent the email to Priya about the delayed cloves shipment."),
+        ]
+    )
+    provider = AsyncOnlyToolsProvider()
+    agent = build_workspace_agent(model=model, tools_provider=provider)
+    orch = _workspace_orch(agent)
+
+    result = orch.invoke(
+        {"messages": [HumanMessage("email priya that the cloves shipment is delayed")]},
+        {"configurable": {"thread_id": "w-async", "google_access_token": "tok-123"}},
+    )
+
+    # The coroutine-only tool actually executed — proves the loop ran via ainvoke, not a sync invoke.
+    assert provider.sent == [
+        {"to": "priya@example.com", "body": "The cloves shipment is delayed two days."}
+    ]
     assert "Sent the email to Priya" in result["messages"][-1].content
 
 
