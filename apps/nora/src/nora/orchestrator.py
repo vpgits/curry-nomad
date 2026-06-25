@@ -238,36 +238,54 @@ def build_orchestrator(
         brief = result.get("brief")  # VideoBrief dict, or None if rejected at review
         if brief is None:  # rejected at review
             return {"messages": [AIMessage(content="Creative cancelled — no brief produced.")]}
-        summary = (
-            f"Video brief ready for {brief['product_name']}: \"{brief['concept']}\" — hook: "
-            f"\"{brief['hook']}\". {len(brief['shots'])} shots, ~{brief['target_duration_s']:.0f}s, "
-            f"CTA: {brief['cta']}. Render: {result.get('render_result', {}).get('status')}."
-        )
-        final = AIMessage(content=summary)
-        # Generative UI: the finished workflow's artifacts as cards on the same channel the
-        # analytics dashboard uses (push_ui_message → LoadExternalComponent), instead of the old
-        # additional_kwargs brief. The brief is the headline; storyboard / script-timeline /
-        # critique are the supporting detail (the storyboard + the evaluator verdict aren't in the
-        # brief card). All anchored to this message via message_id.
-        push_ui_message("video_brief", {"brief": brief}, message=final)
-        if result.get("shots"):
-            push_ui_message(
-                "marketing_storyboard",
-                {"shots": result["shots"], "shot_prompts": result.get("shot_prompts") or []},
-                message=final,
+        # Format the summary + attach the gen-UI cards. Guard THIS post-result block (NOT the
+        # `.invoke` above — a HITL GraphInterrupt must still propagate to pause the orchestrator) so a
+        # malformed/partial brief degrades to a text reply instead of crashing the turn, matching the
+        # routing/workspace nodes' "never crash, degrade" contract.
+        try:
+            summary = (
+                f"Video brief ready for {brief['product_name']}: \"{brief['concept']}\" — hook: "
+                f"\"{brief['hook']}\". {len(brief['shots'])} shots, "
+                f"~{brief['target_duration_s']:.0f}s, "
+                f"CTA: {brief['cta']}. Render: {result.get('render_result', {}).get('status')}."
             )
-        if brief.get("script_beats"):
-            push_ui_message(
-                "marketing_script_timeline", {"script_beats": brief["script_beats"]}, message=final
-            )
-        if result.get("critique"):
-            push_ui_message("marketing_critique", result["critique"], message=final)
-        # Real-render card: hero image + per-shot stills, plus the video job ids the UI polls.
-        # Skipped for the placeholder/cancelled renderer (nothing to show).
-        render_result = result.get("render_result")
-        if render_result and render_result.get("status") in ("rendering", "rendered", "error"):
-            push_ui_message("marketing_render", render_result, message=final)
-        return {"messages": [final]}
+            final = AIMessage(content=summary)
+            # Generative UI: the finished workflow's artifacts as cards on the same channel the
+            # analytics dashboard uses (push_ui_message → LoadExternalComponent), instead of the old
+            # additional_kwargs brief. The brief is the headline; storyboard / script-timeline /
+            # critique are the supporting detail (the storyboard + the evaluator verdict aren't in the
+            # brief card). All anchored to this message via message_id.
+            push_ui_message("video_brief", {"brief": brief}, message=final)
+            if result.get("shots"):
+                push_ui_message(
+                    "marketing_storyboard",
+                    {"shots": result["shots"], "shot_prompts": result.get("shot_prompts") or []},
+                    message=final,
+                )
+            if brief.get("script_beats"):
+                push_ui_message(
+                    "marketing_script_timeline",
+                    {"script_beats": brief["script_beats"]},
+                    message=final,
+                )
+            if result.get("critique"):
+                push_ui_message("marketing_critique", result["critique"], message=final)
+            # Real-render card: hero image + per-shot stills, plus the video job ids the UI polls.
+            # Skipped for the placeholder/cancelled renderer (nothing to show).
+            render_result = result.get("render_result")
+            if render_result and render_result.get("status") in ("rendering", "rendered", "error"):
+                push_ui_message("marketing_render", render_result, message=final)
+            return {"messages": [final]}
+        except Exception as exc:  # noqa: BLE001 — malformed brief → degrade to text, never crash the turn
+            log.info("marketing.skipped", error=str(exc))
+            return {
+                "messages": [
+                    AIMessage(
+                        content="I put together a creative brief but couldn't assemble the full "
+                        "result card — the brief may be incomplete. Please try the request again."
+                    )
+                ]
+            }
 
     def routing(state: OrchestratorState) -> dict:
         # Plan today's delivery route and render it as a generative-UI map card — same push_ui_message

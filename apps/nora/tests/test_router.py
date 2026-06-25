@@ -109,6 +109,30 @@ def test_marketing_request_routes_and_carries_product_hint():
     assert "Roasted Curry Powder" in brief["product_name"]
 
 
+class _MalformedMarketingGraph:
+    """A marketing subgraph stand-in that returns a brief missing required keys — proves the
+    orchestrator's marketing node degrades to text instead of KeyError-crashing the turn."""
+
+    def invoke(self, state, config=None):  # noqa: ARG002 — ignores input by design
+        return {"brief": {"concept": "Bold idea"}}  # no product_name/hook/shots/target_duration_s/cta
+
+
+def test_marketing_malformed_brief_degrades_to_text():
+    """A partial/malformed brief must degrade to a friendly reply (like routing/workspace), not crash
+    the turn on brief['product_name']. The marketing node guards its post-invoke formatting block."""
+    orch = build_orchestrator(
+        router_model=_router(RouteDecision(capability="marketing", reason="make ad")),
+        analytics_graph=_dummy_analytics(),
+        marketing_graph=_MalformedMarketingGraph(),
+        checkpointer=InMemorySaver(),
+    )
+    result = orch.invoke({"messages": [HumanMessage("make a reel")]}, _cfg("m-bad"))
+    assert result["route"]["capability"] == "marketing"
+    assert "couldn't assemble" in result["messages"][-1].content
+    # No video_brief card was emitted for the malformed brief.
+    assert not any(ui.get("name") == "video_brief" for ui in result.get("ui", []))
+
+
 def test_ambiguous_request_routes_to_clarify():
     orch = build_orchestrator(
         router_model=_router(RouteDecision(capability="clarify", reason="ambiguous")),
