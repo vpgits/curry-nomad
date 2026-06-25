@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     workspace_mcp_url: str = "http://localhost:8001"  # the MCP server's streamable-http endpoint
     # Informational echo of the scopes the demo grants; the real enforcement is the MCP server's
     # `--permissions` flag (and the OAuth consent the operator approves).
-    workspace_permissions: str = "gmail:send calendar:readonly"
+    workspace_permissions: str = "gmail:send docs:full sheets:full tasks:full drive:readonly"
 
     # --- Analytics tool guards ---
     max_sql_rows: int = 200  # LIMIT cap injected into run_sql

@@ -132,7 +132,19 @@ services:
     profiles: ["workspace"]
     image: ${WORKSPACE_MCP_IMAGE:-ghcr.io/taylorwilsdon/google_workspace_mcp:latest}
     restart: unless-stopped
-    command: ["--transport", "streamable-http", "--permissions", "gmail:send", "calendar:readonly"]
+    # Tool surface exposed by the server. The real boundary is the OAuth scopes the operator grants
+    # (apps/web/lib/google.ts) — a tool only succeeds if the bearer token carries its scope. Levels:
+    # gmail readonly|organize|drafts|send|full (cumulative), tasks readonly|manage|full, others
+    # readonly|full. Matches the granted set: gmail.compose, documents, spreadsheets, tasks, drive.*.
+    command:
+      - "--transport"
+      - "streamable-http"
+      - "--permissions"
+      - "gmail:send"
+      - "docs:full"
+      - "sheets:full"
+      - "tasks:full"
+      - "drive:readonly"
     environment:
       PORT: "8001"
       MCP_ENABLE_OAUTH21: "true"

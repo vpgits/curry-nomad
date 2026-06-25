@@ -37,7 +37,7 @@ Then the frontend:
 
 ```bash
 cd apps/web
-cp .env.local.example .env.local   # NEXT_PUBLIC_API_URL=http://localhost:2026
+cp .env.example .env.local   # NEXT_PUBLIC_API_URL=http://localhost:2026
 pnpm install
 pnpm dev                           # http://localhost:3000
 ```

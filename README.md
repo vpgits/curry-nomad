@@ -85,7 +85,7 @@ uv run --extra aegra aegra dev                   # serves nora on http://localho
 uv run python apps/nora/scripts/seed_store.py   # seed brand voice + metric definitions into the store
 
 # Frontend:
-cd apps/web && cp .env.local.example .env.local && pnpm install && pnpm dev    # http://localhost:3000
+cd apps/web && cp .env.example .env.local && pnpm install && pnpm dev    # http://localhost:3000
 ```
 
 The UI streams Nora's answers and renders the native **generative-UI cards** pushed from the graph
