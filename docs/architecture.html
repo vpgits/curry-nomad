@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Nora — LangGraph / LangChain Architecture Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  :root{
+    --bg:#fbf7ef; --panel:#fffdf8; --ink:#33291a; --muted:#7c6f5a; --line:#e7ddca;
+    --turmeric:#e0922a; --turmeric-soft:#f6e6c8; --teal:#2bb3a3; --blue:#5b86d6;
+    --green:#3a9b86; --coral:#dd6079; --purple:#9a6bd0; --term:#b9ad97;
+    --shadow:0 1px 2px rgba(80,60,20,.06),0 6px 22px rgba(80,60,20,.07);
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth;scroll-padding-top:84px}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:'IBM Plex Sans',system-ui,sans-serif;line-height:1.55;-webkit-font-smoothing:antialiased}
+  code,.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+  a{color:var(--turmeric);text-decoration:none}
+  a:hover{text-decoration:underline}
+
+  header.hero{padding:38px 24px 26px;max-width:1180px;margin:0 auto}
+  .kicker{font-family:'IBM Plex Mono';font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--turmeric);font-weight:600}
+  h1{font-size:34px;margin:.18em 0 .15em;letter-spacing:-.01em}
+  .lede{color:var(--muted);font-size:16px;max-width:760px}
+  .pillars{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
+  .pillar{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;
+    box-shadow:var(--shadow);font-size:13.5px;display:flex;gap:9px;align-items:flex-start}
+  .pillar b{display:block;font-size:13.5px}
+  .pillar small{color:var(--muted);font-size:12px}
+  .dot{width:10px;height:10px;border-radius:3px;margin-top:5px;flex:0 0 auto}
+
+  nav.top{position:sticky;top:0;z-index:40;background:rgba(251,247,239,.86);backdrop-filter:blur(8px);
+    border-bottom:1px solid var(--line)}
+  nav.top .wrap{max-width:1180px;margin:0 auto;display:flex;gap:4px;overflow-x:auto;padding:9px 16px}
+  nav.top a{white-space:nowrap;color:var(--muted);font-size:13.5px;font-weight:500;padding:6px 11px;border-radius:8px}
+  nav.top a:hover{background:var(--turmeric-soft);color:var(--ink);text-decoration:none}
+  nav.top a.active{background:var(--turmeric);color:#fff}
+
+  main{max-width:1180px;margin:0 auto;padding:8px 16px 80px}
+  section{margin-top:34px;scroll-margin-top:84px}
+  .sec-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+  .sec-head h2{font-size:22px;margin:0;letter-spacing:-.01em}
+  .tag{font-family:'IBM Plex Mono';font-size:11px;font-weight:600;padding:3px 9px;border-radius:999px;border:1px solid var(--line)}
+  .tag.agent{background:#fbeccf;color:#a9690f;border-color:#eccf9a}
+  .tag.workflow{background:#e6eefc;color:#37539e;border-color:#cdddf7}
+  .tag.det{background:#dff1ec;color:#23715f;border-color:#bfe4da}
+  .tag.studio{background:#efe6fa;color:#6f44a8;border-color:#ddccf2}
+  .sec-sub{color:var(--muted);font-size:14.5px;margin:2px 0 14px;max-width:880px}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:18px}
+  .grid2{display:grid;grid-template-columns:1.15fr .85fr;gap:16px;align-items:start}
+  @media(max-width:900px){.grid2{grid-template-columns:1fr}}
+  .diagram{overflow-x:auto}
+  .mermaid{font-family:'IBM Plex Sans'!important}
+
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600}
+  td .nm{font-family:'IBM Plex Mono';font-weight:600;font-size:12.5px}
+  .pill{display:inline-block;font-family:'IBM Plex Mono';font-size:10.5px;font-weight:600;padding:1px 7px;border-radius:999px;line-height:1.7}
+  .pill.s-on{background:#dff1ec;color:#23715f}
+  .pill.s-off{background:#f1ece2;color:#8a7c63}
+  .pill.hitl{background:#fbe1e7;color:#b23a55}
+  .pill.sub{background:#fbeccf;color:#a9690f}
+  .pill.imp{background:#e6eefc;color:#37539e}
+
+  .legend{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin:4px 0 2px;font-size:12.5px;color:var(--muted)}
+  .legend span{display:flex;gap:6px;align-items:center}
+
+  .note{border-left:3px solid var(--turmeric);background:#fdf3e1;padding:11px 14px;border-radius:0 10px 10px 0;font-size:13.5px;margin-top:12px}
+  .note.warn{border-color:var(--coral);background:#fceef1}
+  .note b{color:inherit}
+
+  .cards-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(255px,1fr));gap:12px}
+  .uicard{border:1px solid var(--line);border-radius:12px;padding:12px 13px;background:var(--panel)}
+  .uicard .nm{color:var(--purple)}
+  .uicard small{color:var(--muted);display:block;margin-top:3px;font-size:12px}
+  .uicard .by{font-family:'IBM Plex Mono';font-size:10.5px;color:var(--muted);margin-top:7px}
+
+  .bp{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:820px){.bp{grid-template-columns:1fr}}
+  .bp .card h3{margin:0 0 4px;font-size:15px}
+  .bp .card p{margin:6px 0;font-size:13.5px;color:#4a3f2c}
+  .quote{font-size:12.5px;color:var(--muted);font-style:italic;border-left:2px solid var(--line);padding-left:9px;margin:8px 0}
+  .ok{color:var(--green);font-weight:600}
+  .gap{color:var(--coral);font-weight:600}
+  footer{max-width:1180px;margin:0 auto;padding:24px 16px 60px;color:var(--muted);font-size:12.5px;border-top:1px solid var(--line)}
+  .reducer{font-family:'IBM Plex Mono';font-size:12px}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="kicker">LangGraph · LangChain 1.x · Aegra</div>
+  <h1>Nora — Architecture Map</h1>
+  <p class="lede">One <b>orchestrator</b> routes each request to a capability that deliberately contrasts in
+  <i>how much agency it has</i> — a hand-written agent, a deterministic workflow, a non-agentic service, and an
+  optional MCP agent. Mapped from source; node-type colors are consistent across every diagram.</p>
+  <div class="pillars">
+    <div class="pillar"><span class="dot" style="background:var(--turmeric)"></span><div><b>Analytics — an AGENT</b><small>tool loop over SQL, self-corrects</small></div></div>
+    <div class="pillar"><span class="dot" style="background:var(--blue)"></span><div><b>Marketing — a WORKFLOW</b><small>chain ∥ fan-out · evaluator loop · 2 HITL gates</small></div></div>
+    <div class="pillar"><span class="dot" style="background:var(--green)"></span><div><b>Routing — DETERMINISTIC</b><small>TSP optimizer, no LLM</small></div></div>
+    <div class="pillar"><span class="dot" style="background:var(--purple)"></span><div><b>Workspace — MCP AGENT</b><small>Gmail/Calendar via MCP · off by default</small></div></div>
+  </div>
+</header>
+
+<nav class="top"><div class="wrap">
+  <a href="#orchestrator" class="active">Orchestrator</a>
+  <a href="#analytics">Analytics · Agent</a>
+  <a href="#marketing">Marketing · Workflow</a>
+  <a href="#workspace">Workspace · MCP</a>
+  <a href="#a2ui">A2UI Studio</a>
+  <a href="#genui">Gen-UI Cards</a>
+  <a href="#state">State &amp; Reducers</a>
+  <a href="#architecture">Architecture options</a>
+  <a href="#bestpractices">Best Practices</a>
+</div></nav>
+
+<main>
+
+<div class="legend card" style="padding:12px 16px;margin-top:14px">
+  <div class="legend">
+    <span><span class="dot" style="background:var(--teal)"></span>Router / classifier</span>
+    <span><span class="dot" style="background:var(--turmeric)"></span>Agent (dynamic tool loop)</span>
+    <span><span class="dot" style="background:var(--blue)"></span>Workflow / LLM step</span>
+    <span><span class="dot" style="background:var(--green)"></span>Deterministic (no LLM)</span>
+    <span><span class="dot" style="background:var(--coral)"></span>HITL gate (interrupt)</span>
+    <span><span class="dot" style="background:var(--purple)"></span>Gen-UI compose</span>
+    <span><span class="dot" style="background:var(--term)"></span>Terminal / tool</span>
+    <span style="margin-left:auto"><span class="pill sub">subgraph</span> <span class="pill imp">imperative</span> <span class="pill s-on">streams</span></span>
+  </div>
+</div>
+
+<!-- ORCHESTRATOR -->
+<section id="orchestrator">
+  <div class="sec-head"><h2>Orchestrator</h2><span class="tag">graph: nora</span><span class="pill sub">2 compile paths</span></div>
+  <p class="sec-sub"><code>START → route → Command(goto=…) → capability → END</code>. The router is a cheap classifier
+  (<code>with_structured_output(RouteDecision)</code>, streaming off) that dispatches by <code>Command(goto)</code>.
+  Analytics is wired as a <b>real subgraph node</b> (its tool steps + streamed answer flow inline); marketing &amp;
+  workspace are <b>imperative</b> <code>.invoke()/.ainvoke()</code> nodes so their config pass-through carries HITL &amp; per-run tokens.</p>
+  <div class="grid2">
+    <div class="card diagram">
+      <pre class="mermaid">
+flowchart TD
+  S([START]):::term --> R{{"route<br/>classifier · RouteDecision"}}:::router
+  R -->|analytics| A["analytics<br/>AGENT · real subgraph"]:::agent
+  R -->|marketing| M["marketing<br/>WORKFLOW · imperative"]:::workflow
+  R -->|routing| RT["routing<br/>DETERMINISTIC · ops API"]:::det
+  R -->|workspace| W["workspace<br/>AGENT · MCP · imperative"]:::agent
+  R -->|clarify| C["clarify<br/>fallback"]:::term
+  A --> D["analytics_dashboard<br/>gen-UI compose"]:::genui
+  D --> E([END]):::term
+  M --> E
+  RT --> E
+  W --> E
+  C --> E
+  classDef term fill:#efe7d6,stroke:#b9ad97,color:#5a4d35
+  classDef router fill:#2bb3a3,stroke:#1f8478,color:#fff
+  classDef agent fill:#e0922a,stroke:#b1700f,color:#fff
+  classDef workflow fill:#5b86d6,stroke:#3d63ad,color:#fff
+  classDef det fill:#3a9b86,stroke:#2a7665,color:#fff
+  classDef genui fill:#9a6bd0,stroke:#744aa8,color:#fff
+      </pre>
+    </div>
+    <div class="card">
+      <table>
+        <tr><th>Node</th><th>Kind</th><th></th></tr>
+        <tr><td><span class="nm">route</span><br><small>classifies → goto</small></td><td>router</td><td><span class="pill s-off">no stream</span></td></tr>
+        <tr><td><span class="nm">analytics</span><br><small>agent tool loop</small></td><td>agent</td><td><span class="pill sub">subgraph</span> <span class="pill s-on">streams</span></td></tr>
+        <tr><td><span class="nm">analytics_dashboard</span><br><small>builds dashboard card</small></td><td>gen-UI</td><td><span class="pill s-off">no stream</span></td></tr>
+        <tr><td><span class="nm">marketing</span><br><small>runs the workflow</small></td><td>workflow</td><td><span class="pill imp">imperative</span></td></tr>
+        <tr><td><span class="nm">routing</span><br><small>plans route via ops API</small></td><td>deterministic</td><td><span class="pill imp">imperative</span></td></tr>
+        <tr><td><span class="nm">workspace</span><br><small>Gmail/Calendar via MCP</small></td><td>agent</td><td><span class="pill imp">imperative</span> <span class="pill s-on">streams</span></td></tr>
+        <tr><td><span class="nm">clarify</span><br><small>disambiguation reply</small></td><td>fallback</td><td></td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="note"><b>Why analytics is a subgraph but marketing/workspace are imperative:</b> a real subgraph node
+  streams its messages up into the top-level thread. Marketing &amp; workspace need <code>config</code> threaded into a
+  manual <code>.invoke()</code> — marketing so a deep <code>interrupt()</code> bubbles up and pauses the whole orchestrator;
+  workspace so the per-run Google token in <code>config.configurable.google_access_token</code> reaches the MCP client.</div>
+</section>
+
+<!-- ANALYTICS -->
+<section id="analytics">
+  <div class="sec-head"><h2>Analytics</h2><span class="tag agent">AGENT — tool loop</span></div>
+  <p class="sec-sub">Hand-written <code>llm ↔ tools</code> loop (not <code>create_agent</code>, so the mechanism is visible).
+  <b>Self-correction:</b> <code>run_sql</code> lets <code>SqlError</code> propagate; <code>ToolNode(handle_tool_errors=handle_sql_error)</code>
+  turns it into a ToolMessage the model reads and repairs — and catches <i>only</i> <code>SqlError</code>, so any other bug fails loud.</p>
+  <div class="grid2">
+    <div class="card diagram">
+      <pre class="mermaid">
+flowchart LR
+  S([START]):::term --> L["llm<br/>bind_tools · streaming"]:::agent
+  L -->|"should_continue: tool_calls"| T["tools (ToolNode)<br/>list_tables · describe_table · run_sql<br/>handle_sql_error → SqlError only"]:::tool
+  L -->|else| E([END]):::term
+  T -->|"ToolMessage (incl. SQL error)"| L
+  classDef term fill:#efe7d6,stroke:#b9ad97,color:#5a4d35
+  classDef agent fill:#e0922a,stroke:#b1700f,color:#fff
+  classDef tool fill:#f6e6c8,stroke:#d8bd87,color:#7a5c1e
+      </pre>
+      <div class="note" style="margin-top:14px"><b>Memory:</b> before each run the <code>llm</code> node reads metric
+      definitions from the semantic Store (<code>DEFINITIONS</code> namespace) via <code>runtime.store.search(...)</code> and folds them into the prompt.</div>
+    </div>
+    <div class="card">
+      <table>
+        <tr><th>Tool</th><th>Behavior</th></tr>
+        <tr><td><span class="nm">list_tables</span></td><td>names of tables in the read-only bundled SQLite DB</td></tr>
+        <tr><td><span class="nm">describe_table</span></td><td>columns + sample rows for one table</td></tr>
+        <tr><td><span class="nm">run_sql</span></td><td>read-only SELECT; <b>raises <code>SqlError</code></b> → becomes a ToolMessage for repair</td></tr>
+      </table>
+      <div class="note" style="margin-top:14px"><b>Reasoning (opt-in):</b> with an Anthropic model + <code>NORA_THINKING_BUDGET&gt;0</code>,
+      the agent streams <code>thinking</code> blocks rendered as a collapsible reasoning card. Default gpt-4o path emits none.</div>
+    </div>
+  </div>
+</section>
+
+<!-- MARKETING -->
+<section id="marketing">
+  <div class="sec-head"><h2>Marketing</h2><span class="tag workflow">WORKFLOW — chain ∥ + evaluator</span></div>
+  <p class="sec-sub">A fixed-shape pipeline: <b>chaining → parallel ideation → HITL → parallel shot fan-out (<code>Send</code>) →
+  evaluator-optimizer loop → assemble → render</b>. Two HITL gates sit <i>before</i> the expensive creative steps.
+  All models run <code>disable_streaming=True</code> (their outputs are consumed into structured state, never streamed as chat).</p>
+  <div class="card diagram">
+    <pre class="mermaid">
+flowchart TD
+  S([START]):::term --> FP["fetch_product<br/>SpiceDB grounding"]:::det
+  FP --> LB["load_brand<br/>Store: brand voice"]:::det
+  LB --> ID["ideate ∥<br/>N concepts (ThreadPool)"]:::workflow
+  ID --> CC{{"choose_concept<br/>HITL · kind: concept_pick"}}:::hitl
+  CC --> WS["write_script<br/>→ ScriptBeats"]:::workflow
+  WS --> HR{{"human_review<br/>HITL · kind: script_review"}}:::hitl
+  HR -->|"Command: approved"| SB["storyboard<br/>resets shot_prompts"]:::workflow
+  HR -->|"Command: rejected"| X["cancel"]:::term
+  SB -->|"Send fan-out / shot"| SPW["shot_prompt_worker ∥"]:::workflow
+  SPW -->|"fan-in (operator.add)"| CR["critique<br/>evaluator: passed?"]:::workflow
+  CR -->|"pass or max_revisions"| AS["assemble<br/>→ VideoBrief"]:::workflow
+  CR -->|"else"| RV["revise<br/>++revision_count"]:::workflow
+  RV --> SB
+  AS --> RN["render<br/>placeholder | OpenRouter"]:::det
+  RN --> E([END]):::term
+  X --> E
+  classDef term fill:#efe7d6,stroke:#b9ad97,color:#5a4d35
+  classDef workflow fill:#5b86d6,stroke:#3d63ad,color:#fff
+  classDef det fill:#3a9b86,stroke:#2a7665,color:#fff
+  classDef hitl fill:#dd6079,stroke:#b23a55,color:#fff
+    </pre>
+  </div>
+  <div class="grid2" style="margin-top:14px">
+    <div class="card">
+      <div class="sec-head" style="margin-bottom:8px"><h2 style="font-size:15px">Two HITL gates</h2></div>
+      <table>
+        <tr><th>Gate</th><th>Payload kind</th><th>Resume</th></tr>
+        <tr><td><span class="nm">choose_concept</span><br><small>off unless <code>auto_choose=False</code></small></td><td><span class="pill hitl">concept_pick</span></td><td><code>{chosen_index}</code></td></tr>
+        <tr><td><span class="nm">human_review</span><br><small>off unless <code>auto_approve=False</code></small></td><td><span class="pill hitl">script_review</span></td><td><code>{approved, edited_script}</code></td></tr>
+      </table>
+      <small style="color:var(--muted)">Both default to <i>skip</i> so unattended evals keep a single gate; the orchestrator passes <code>auto_choose=False, auto_approve=False</code> to surface both.</small>
+    </div>
+    <div class="card">
+      <div class="sec-head" style="margin-bottom:8px"><h2 style="font-size:15px">The two non-obvious reducers</h2></div>
+      <p style="font-size:13.5px;margin:4px 0"><span class="reducer">concepts: operator.add</span> — fan-in for parallel ideation (gathers N <code>ConceptIdea</code>s).</p>
+      <p style="font-size:13.5px;margin:4px 0"><span class="reducer">shot_prompts: reset_or_extend</span> — returns <code>[]</code> when a node yields <code>None</code>, so the evaluator loop <b>clears stale per-shot prompts</b> before regenerating on each revision.</p>
+      <div class="note"><b>Bounded loop:</b> <code>critique → revise</code> repeats until <code>passed</code> or <code>marketing_max_revisions</code> (default 2).</div>
+    </div>
+  </div>
+</section>
+
+<!-- WORKSPACE -->
+<section id="workspace">
+  <div class="sec-head"><h2>Workspace</h2><span class="tag agent">AGENT — over MCP</span><span class="pill imp">optional · off by default</span></div>
+  <p class="sec-sub">Same <code>llm ↔ tools</code> shape as analytics, but the tool set is <b>minted per-run</b> from the operator's
+  MCP client (their Google OAuth bearer in the headers) — so it can't be a static subgraph node. <code>build_workspace_agent</code>
+  returns a callable that compiles a fresh one-shot loop each turn. Errors mirror analytics: <code>handle_workspace_error</code> catches <i>only</i> <code>ToolException</code>.</p>
+  <div class="grid2">
+    <div class="card diagram">
+      <pre class="mermaid">
+flowchart LR
+  S([START]):::term --> L["llm<br/>bind_tools(per-run MCP)"]:::agent
+  L -->|"should_continue: tool_calls"| T["tools (ToolNode)<br/>Gmail · Calendar · Tasks · Drive<br/>handle_workspace_error → ToolException only"]:::tool
+  L -->|else| E([END]):::term
+  T --> L
+  classDef term fill:#efe7d6,stroke:#b9ad97,color:#5a4d35
+  classDef agent fill:#e0922a,stroke:#b1700f,color:#fff
+  classDef tool fill:#f6e6c8,stroke:#d8bd87,color:#7a5c1e
+      </pre>
+    </div>
+    <div class="card">
+      <p style="font-size:13.5px;margin-top:0"><b>Two auth planes, kept separate:</b></p>
+      <p style="font-size:13px;margin:6px 0"><b>Plane 1 — identity.</b> Aegra <code>AUTH_TYPE=custom</code> + <code>auth.py</code> verify the NextAuth HS256 session JWT (per-operator thread scoping).</p>
+      <p style="font-size:13px;margin:6px 0"><b>Plane 2 — authorization.</b> A separate incremental Google grant; the access token rides per-run in <code>config.configurable.google_access_token</code>.</p>
+      <div class="note"><b>Async-only MCP tools.</b> langchain-mcp-adapters exposes coroutine-only tools — a sync
+      <code>.invoke()</code> raises <code>"StructuredTool does not support sync invocation"</code>. The runner drives the loop with
+      <code>asyncio.run(agent.ainvoke(...))</code>. <b>This still streams token-by-token</b> (verified end-to-end): LangChain streaming is
+      callback-based, the handlers ride in <code>config</code>, and they're thread-safe — the inner event loop doesn't detach them.
+      Tokens arrive under a <code>workspace:…</code> subgraph namespace, so <code>streamSubgraphs:true</code> clients render them inline like analytics.</div>
+    </div>
+  </div>
+</section>
+
+<!-- A2UI -->
+<section id="a2ui">
+  <div class="sec-head"><h2>A2UI Studio</h2><span class="tag studio">graph: nora_a2ui</span></div>
+  <p class="sec-sub">The dynamic-schema contrast to the fixed analytics dashboard: a "UI-author" model <b>composes</b> the surface
+  from an ordered list of catalog blocks (<code>A2uiSurface</code> / <code>A2uiBlock</code>) — the "LLM authors the UI" pattern, rendered by <code>/studio</code>.</p>
+  <div class="card diagram" style="max-width:760px">
+    <pre class="mermaid">
+flowchart LR
+  S([START]):::term --> A["analytics<br/>real subgraph · streams"]:::agent
+  A --> U["ui_author<br/>→ A2uiSurface (heading/text/metrics/chart/table)"]:::genui
+  U --> E([END]):::term
+  classDef term fill:#efe7d6,stroke:#b9ad97,color:#5a4d35
+  classDef agent fill:#e0922a,stroke:#b1700f,color:#fff
+  classDef genui fill:#9a6bd0,stroke:#744aa8,color:#fff
+    </pre>
+  </div>
+  <div class="note"><b>Why <code>A2uiBlock</code> is one flat model, not a discriminated union:</b> OpenAI strict structured-output
+  rejects <code>anyOf</code>/<code>oneOf</code>, so a union would make the authoring call throw. Same constraint shapes <code>AnalyticsDashboard</code>.</div>
+</section>
+
+<!-- GEN-UI -->
+<section id="genui">
+  <div class="sec-head"><h2>Generative-UI cards</h2><span class="pill" style="background:#efe6fa;color:#6f44a8">push_ui_message</span></div>
+  <p class="sec-sub">Capabilities attach typed cards via <code>push_ui_message("&lt;name&gt;", payload, message=…)</code>; the web client
+  renders them with <code>LoadExternalComponent</code> (no CopilotKit). Always best-effort — a failure skips the card, never the text answer.</p>
+  <div class="cards-grid">
+    <div class="uicard"><span class="nm">analytics_dashboard</span><small>stats · table · chart, composed from the answer + SQL</small><div class="by">▸ analytics_dashboard</div></div>
+    <div class="uicard"><span class="nm">video_brief</span><small>headline brief: concept, hook, CTA, shots</small><div class="by">▸ marketing</div></div>
+    <div class="uicard"><span class="nm">marketing_storyboard</span><small>shots + per-shot text-to-video prompts</small><div class="by">▸ marketing</div></div>
+    <div class="uicard"><span class="nm">marketing_script_timeline</span><small>voiceover beats + timing</small><div class="by">▸ marketing</div></div>
+    <div class="uicard"><span class="nm">marketing_critique</span><small>evaluator verdict: passed, issues, suggestions</small><div class="by">▸ marketing</div></div>
+    <div class="uicard"><span class="nm">marketing_render</span><small>hero image + stills + polled video job ids</small><div class="by">▸ marketing</div></div>
+    <div class="uicard"><span class="nm">route_map</span><small>Leaflet map: stops, km, % vs naive baseline</small><div class="by">▸ routing</div></div>
+    <div class="uicard"><span class="nm">workspace_actions</span><small>badge + which Google tools were used</small><div class="by">▸ workspace</div></div>
+    <div class="uicard"><span class="nm">a2ui_surface</span><small>model-authored block list</small><div class="by">▸ ui_author (nora_a2ui)</div></div>
+  </div>
+</section>
+
+<!-- STATE -->
+<section id="state">
+  <div class="sec-head"><h2>State, reducers &amp; the two compile paths</h2></div>
+  <div class="grid2">
+    <div class="card">
+      <div class="sec-head" style="margin-bottom:8px"><h2 style="font-size:15px">Reducers (state.py)</h2></div>
+      <table>
+        <tr><th>Reducer</th><th>Where / why</th></tr>
+        <tr><td><span class="nm">add_messages</span></td><td>chat history — id-aware merge (same id updates in place)</td></tr>
+        <tr><td><span class="nm">operator.add</span></td><td>fan-in for parallel ideation (<code>concepts</code>)</td></tr>
+        <tr><td><span class="nm">reset_or_extend</span></td><td><code>shot_prompts</code> — clears on <code>None</code> so each revision regenerates clean</td></tr>
+        <tr><td><span class="nm">ui_message_reducer</span></td><td>the native gen-UI channel (<code>ui</code>)</td></tr>
+      </table>
+      <small style="color:var(--muted)">State is <b>TypedDict + JSON-native dicts</b> (not Pydantic) — required by the prebuilt-agent path and clean for partial updates.</small>
+    </div>
+    <div class="card">
+      <div class="sec-head" style="margin-bottom:8px"><h2 style="font-size:15px">build_* vs make_*</h2></div>
+      <p style="font-size:13.5px;margin:4px 0"><b><code>build_orchestrator(...)</code></b> — explicit constructors with <b>injectable</b> model / checkpointer / store / planners. How tests &amp; the CLI wire things (in-memory persistence).</p>
+      <p style="font-size:13.5px;margin:4px 0"><b><code>make_graph()</code> / <code>make_a2ui_graph()</code></b> — referenced by <code>aegra.json</code> as <code>nora</code> / <code>nora_a2ui</code>. Compile <b>without</b> checkpointer/store because the <i>platform</i> (Aegra) injects Postgres persistence + the semantic Store at runtime.</p>
+      <div class="note"><b>Memory is compiled in <i>and read</i>:</b> a checkpointer (short-term, makes interrupt/resume work) <b>and</b> a semantic Store (long-term) — namespaces <code>BRAND</code> (marketing) &amp; <code>DEFINITIONS</code> (analytics).</div>
+    </div>
+  </div>
+</section>
+
+<!-- ARCHITECTURE OPTIONS -->
+<section id="architecture">
+  <div class="sec-head"><h2>Could this be one orchestrator <i>agent</i> with the capabilities as nodes?</h2><span class="pill" style="background:#dff1ec;color:#23715f">router → supervisor</span></div>
+  <p class="sec-sub">Yes — that's the <b>supervisor</b> pattern, and LangGraph supports it. But the docs draw a sharp line:
+  <i>"a <b>supervisor</b> is a full agent that dynamically decides which subagents to call across multiple turns; a <b>router</b> is a single
+  classification step that dispatches without ongoing state."</i> Nora today is a <b>router</b> (classify once → one capability → END), so it
+  can't compose ("analyze sales <i>then</i> make an ad for the winner" = two turns). Below are four ways to evolve it, with the trade-offs that
+  actually matter for <i>this</i> codebase.</p>
+
+  <div class="note warn" style="margin-bottom:16px"><b>The Nora-specific catch that rules out the simplest option:</b> the docs warn that subagents called
+  <i>as tools</i> are <b>not statically discoverable</b> — <code>get_state(subgraphs=True)</code> can't see their interrupt state, and
+  <i>"to read nested graph state during an interrupt, invoke the subagent from a node function in a custom graph instead."</i> Nora leans hard on
+  exactly that (marketing HITL gates + <code>useStream</code> resume, and native subgraph-namespace gen-UI streaming). So the tidy "everything is a tool"
+  supervisor (Option A) is the <b>worst</b> fit for Nora's HITL/gen-UI — which pushes toward keeping capabilities as graph <b>nodes</b> (Options B/C).</div>
+
+  <div class="cards-grid" style="grid-template-columns:repeat(auto-fill,minmax(330px,1fr))">
+    <div class="card diagram">
+      <h3 style="margin:0 0 4px;font-size:15px">0 · Router <span class="pill s-on">today</span></h3>
+      <p style="font-size:12.5px;color:var(--muted);margin:0 0 8px">Classify once → dispatch one → END. Single intent per turn.</p>
+      <pre class="mermaid">
+flowchart LR
+  U([turn]):::term --> R{{"route<br/>classify once"}}:::router
+  R -->|"Command goto"| C["one capability"]:::agent
+  C --> E([END]):::term
+  classDef term fill:#efe7d6,stroke:#b9ad97,color:#5a4d35
+  classDef router fill:#2bb3a3,stroke:#1f8478,color:#fff
+  classDef agent fill:#e0922a,stroke:#b1700f,color:#fff
+      </pre>
+    </div>
+    <div class="card diagram">
+      <h3 style="margin:0 0 4px;font-size:15px">A · Supervisor — capabilities as <i>tools</i></h3>
+      <p style="font-size:12.5px;color:var(--muted);margin:0 0 8px">Tool-calling agent loops; can call several per turn, reasons over results.</p>
+      <pre class="mermaid">
+flowchart TD
+  U([turn]):::term --> S{{"supervisor agent<br/>tool-calling loop"}}:::agent
+  S -->|tool| AN["analytics"]:::tool
+  S -->|tool| MK["marketing"]:::tool
+  S -->|tool| RT["routing"]:::tool
+  S -->|tool| WS["workspace"]:::tool
+  AN -.result.-> S
+  MK -.result.-> S
+  RT -.result.-> S
+  WS -.result.-> S
+  S -->|done| E([END]):::term
+  classDef term fill:#efe7d6,stroke:#b9ad97,color:#5a4d35
+  classDef agent fill:#e0922a,stroke:#b1700f,color:#fff
+  classDef tool fill:#f6e6c8,stroke:#d8bd87,color:#7a5c1e
+      </pre>
+    </div>
+    <div class="card diagram">
+      <h3 style="margin:0 0 4px;font-size:15px">B · Handoff — agents as <i>nodes</i> + <code>goto</code> <span class="pill s-on">recommended</span></h3>
+      <p style="font-size:12.5px;color:var(--muted);margin:0 0 8px">Supervisor node routes, control returns to it after each step. Nodes keep streaming + interrupts.</p>
+      <pre class="mermaid">
+flowchart TD
+  U([turn]):::term --> S{{"supervisor node<br/>pick next step"}}:::router
+  S -->|goto| AN["analytics"]:::agent
+  S -->|goto| MK["marketing"]:::workflow
+  S -->|goto| RT["routing"]:::det
+  S -->|goto| WS["workspace"]:::agent
+  AN -->|back| S
+  MK -->|back| S
+  RT -->|back| S
+  WS -->|back| S
+  S -->|done| E([END]):::term
+  classDef term fill:#efe7d6,stroke:#b9ad97,color:#5a4d35
+  classDef router fill:#2bb3a3,stroke:#1f8478,color:#fff
+  classDef agent fill:#e0922a,stroke:#b1700f,color:#fff
+  classDef workflow fill:#5b86d6,stroke:#3d63ad,color:#fff
+  classDef det fill:#3a9b86,stroke:#2a7665,color:#fff
+      </pre>
+    </div>
+    <div class="card diagram">
+      <h3 style="margin:0 0 4px;font-size:15px">C · Plan-and-execute</h3>
+      <p style="font-size:12.5px;color:var(--muted);margin:0 0 8px">Planner emits an ordered plan once; a deterministic executor walks it over the capability nodes.</p>
+      <pre class="mermaid">
+flowchart LR
+  U([turn]):::term --> P{{"planner<br/>emit ordered plan"}}:::router
+  P --> X["executor<br/>deterministic loop"]:::det
+  X -->|"step → goto"| C["capability node"]:::agent
+  C --> X
+  X -->|"plan done"| E([END]):::term
+  classDef term fill:#efe7d6,stroke:#b9ad97,color:#5a4d35
+  classDef router fill:#2bb3a3,stroke:#1f8478,color:#fff
+  classDef det fill:#3a9b86,stroke:#2a7665,color:#fff
+  classDef agent fill:#e0922a,stroke:#b1700f,color:#fff
+      </pre>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px;overflow-x:auto">
+    <table>
+      <tr>
+        <th>Option</th><th>Multi-capability / turn</th><th>Model-call cost</th>
+        <th>HITL · streaming · gen-UI fit</th><th>"Agent can't oversell" pillar</th><th>Teaching contrast</th><th>Pick when</th>
+      </tr>
+      <tr>
+        <td><span class="nm">0 · Router</span> <small>(today)</small></td>
+        <td>No — one only</td><td>Lowest (≈3)</td>
+        <td><span class="pill s-on">native ✓</span> works today</td><td><span class="ok">✓ strong</span> (deterministic node)</td><td><span class="ok">✓ clearest</span></td>
+        <td>Single-intent turns; simplest.</td>
+      </tr>
+      <tr>
+        <td><span class="nm">A · Supervisor (tools)</span></td>
+        <td>Yes — incl. parallel</td><td>Highest (+1 call/hop)</td>
+        <td><span class="pill" style="background:#fbe1e7;color:#b23a55">caveat △</span> interrupt state not statically visible; cards lose subgraph namespace</td>
+        <td><span class="gap">△ weaker</span> — supervisor decides every call</td><td><span class="gap">△</span> everything looks like "a tool"</td>
+        <td>Conversational composition; simplest code — if HITL/gen-UI weren't central.</td>
+      </tr>
+      <tr style="background:#fdf8ee">
+        <td><span class="nm">B · Handoff (nodes)</span> <span class="pill s-on">rec.</span></td>
+        <td>Yes — sequential</td><td>Med (+1 call/hop)</td>
+        <td><span class="ok">✓</span> nodes keep streaming + interrupt state + gen-UI</td>
+        <td><span class="ok">✓</span> routing stays a deterministic node</td><td><span class="ok">✓ preserved</span></td>
+        <td>Want multi-capability turns without losing Nora's current strengths.</td>
+      </tr>
+      <tr>
+        <td><span class="nm">C · Plan-and-execute</span></td>
+        <td>Yes — pre-planned</td><td>Low (1 plan call)</td>
+        <td><span class="ok">✓</span> + the plan itself is HITL-able ("approve plan?")</td>
+        <td><span class="ok">✓</span> executor is deterministic</td><td><span class="ok">✓</span> + teaches planning limits</td>
+        <td>Bounded multi-step with an auditable plan; very on-brand.</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="note"><b>Recommendation for Nora:</b> if you want a single orchestrating agent that <i>composes</i> capabilities, go <b>Option B</b>
+  (agents-as-nodes + <code>Command(goto)</code> handoff) — it's the exact form the docs point to when <i>"a node is itself a complex graph with reflection"</i>
+  (marketing's evaluator loop) and when you <i>"need to read nested interrupt state."</i> It keeps streaming, HITL, gen-UI, and the deterministic-ops pillar
+  intact, and only adds a small supervisor node + an <code>active</code>/plan state field. <b>Option C</b> is the most teaching-appropriate middle ground
+  (one planning call, deterministic execution, an inspectable plan). And per LangChain's own "start simple — add dynamics only when needed": if single-intent-per-turn
+  is acceptable, <b>Option 0 (today's router) is still correct</b> — don't buy agency you don't need. The one option to avoid for Nora specifically is the
+  tools-only supervisor (A), because it forfeits the interrupt-state visibility and subgraph-namespace streaming the app is built on.</div>
+
+  <div class="note" style="border-color:var(--blue);background:#eef3fc"><b>Migration cost (B), concretely:</b> add a <code>supervisor</code> node and a
+  <code>plan: list[str]</code> / <code>step: int</code> (or <code>active</code>) field to <code>OrchestratorState</code>; change each capability's terminal
+  edge from <code>→ END</code> to <code>→ supervisor</code>; the supervisor advances the plan and emits <code>Command(goto=next | END)</code>. Capabilities stay
+  byte-for-byte the same compiled subgraphs/nodes — only the wiring around them changes. Mind the docs' context-hygiene rule: pass only a compact summary of each
+  capability's result back to the supervisor, not the full sub-thread.</div>
+</section>
+
+<!-- BEST PRACTICES -->
+<section id="bestpractices">
+  <div class="sec-head"><h2>Alignment with LangChain's published guidance</h2><span class="pill" style="background:#dff1ec;color:#23715f">docs.langchain.com</span></div>
+  <p class="sec-sub">Read from the LangChain docs MCP — <i>Workflows &amp; agents</i>, <i>Streaming</i>, <i>Human-in-the-loop</i>,
+  <i>Multi-agent patterns</i>, <i>Context engineering</i>. The codebase tracks the recommended patterns closely; one real gap.</p>
+  <div class="bp">
+    <div class="card">
+      <h3>Workflow vs. agent <span class="ok">✓ textbook</span></h3>
+      <p class="quote">"Workflows have predetermined code paths… Agents are dynamic and define their own processes and tool usage."</p>
+      <p>Their five patterns — chaining, parallelization, routing, orchestrator-worker, evaluator-optimizer — are all present:
+      analytics = agent, marketing = chaining + parallel + evaluator loop, <code>route</code> = routing.</p>
+    </div>
+    <div class="card">
+      <h3>Nodes can be functions, LLM calls, or whole agents <span class="ok">✓</span></h3>
+      <p class="quote">"Each node can be a simple function, an LLM call, or an entire agent with tools… mixing deterministic logic and agentic behavior."</p>
+      <p>The orchestrator does exactly this: <code>route</code> (LLM), <code>analytics</code>/<code>workspace</code> (agents), <code>marketing</code> (workflow), <code>routing</code> (plain function).</p>
+    </div>
+    <div class="card">
+      <h3>Streaming "from any part of the graph" <span class="ok">✓ verified</span></h3>
+      <p class="quote">"Use messages mode to stream LLM outputs token-by-token from any part of your graph, including nodes, tools, subgraphs" (+ <code>subgraphs=True</code>).</p>
+      <p>Both analytics <i>and</i> workspace stream token-by-token (tested end-to-end). Streaming is <b>callback-based</b>: the handlers ride in
+      <code>config</code>, so workspace's <code>asyncio.run(agent.ainvoke(…, config))</code> does <b>not</b> detach them (they're thread-safe, not loop-bound).
+      Tokens arrive under a <code>workspace:…</code> subgraph namespace; clients just need <code>subgraphs=True</code> (the web app's <code>streamSubgraphs:true</code>).</p>
+    </div>
+    <div class="card">
+      <h3>Keep internal calls off the stream <span class="ok">✓</span></h3>
+      <p class="quote">"Use the <code>nostream</code> tag to exclude LLM output… when you stream the same content through a different channel and want to avoid duplicate output."</p>
+      <p>Router, dashboard, a2ui-author and marketing all set <code>disable_streaming=True</code> for exactly this reason — their structured outputs are consumed into state, not shown as chat.</p>
+    </div>
+    <div class="card">
+      <h3>Human-in-the-loop &amp; bubbling <span class="ok">✓</span></h3>
+      <p class="quote">"For nested subgraphs, read message chunks from <code>stream.subgraphs[*].messages</code>"; resume with <code>Command(resume=…)</code>. Static breakpoints are "not recommended for HITL".</p>
+      <p>Marketing uses dynamic <code>interrupt()</code> (not breakpoints); the <code>config</code> pass-through bubbles the gate up through the orchestrator; the web resumes via <code>useStream</code>'s <code>stream.interrupt</code>.</p>
+    </div>
+    <div class="card">
+      <h3>Context engineering — "add dynamics only when needed" <span class="ok">✓</span></h3>
+      <p class="quote">"Start simple — begin with static prompts and tools, add dynamics only when needed."</p>
+      <p>Tools are bound statically everywhere except workspace, where they're genuinely token-dependent (per-operator MCP). That's the rule applied, not over-applied.</p>
+    </div>
+  </div>
+  <div class="note"><b>Verified, no change needed:</b> an earlier draft of this map claimed workspace couldn't stream because
+  <code>asyncio.run</code> "detached" the stream. That was wrong — tested end-to-end, the workspace agent streams token-by-token (6/6 chunks,
+  same message id as the final state, under a <code>workspace:…</code> subgraph namespace), identical to analytics. Streaming is callback-based and the
+  handlers travel in <code>config</code>; the inner event loop is irrelevant. The codebase already matches every recommended pattern.</div>
+</section>
+
+</main>
+
+<footer>
+  Generated from source on 2026-06-25 · graphs <code>nora</code> + <code>nora_a2ui</code> (aegra.json) ·
+  node-type colors match the legend across all diagrams · diagrams rendered with Mermaid.
+</footer>
+
+<script>
+  mermaid.initialize({
+    startOnLoad:true,
+    theme:'base',
+    securityLevel:'loose',
+    flowchart:{curve:'basis',nodeSpacing:42,rankSpacing:46,padding:8},
+    themeVariables:{
+      fontFamily:'IBM Plex Sans, sans-serif',
+      fontSize:'13px',
+      lineColor:'#c9bca0',
+      primaryColor:'#fffdf8',
+      primaryTextColor:'#33291a',
+      primaryBorderColor:'#e7ddca'
+    }
+  });
+  // scroll-spy for the top nav
+  const links=[...document.querySelectorAll('nav.top a')];
+  const map=new Map(links.map(a=>[a.getAttribute('href').slice(1),a]));
+  const obs=new IntersectionObserver((entries)=>{
+    entries.forEach(e=>{
+      if(e.isIntersecting){
+        links.forEach(l=>l.classList.remove('active'));
+        const a=map.get(e.target.id); if(a)a.classList.add('active');
+      }
+    });
+  },{rootMargin:'-45% 0px -50% 0px',threshold:0});
+  document.querySelectorAll('main section').forEach(s=>obs.observe(s));
+</script>
+</body>
+</html>
