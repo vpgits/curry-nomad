@@ -465,7 +465,7 @@ requires-dist = [
     { name = "httpx", marker = "extra == 'operations'", specifier = ">=0.27" },
     { name = "langchain", specifier = ">=1.0,<2.0" },
     { name = "langchain-anthropic", marker = "extra == 'anthropic'", specifier = ">=0.3" },
-    { name = "langchain-mcp-adapters", marker = "extra == 'workspace'", specifier = ">=0.1" },
+    { name = "langchain-mcp-adapters", marker = "extra == 'workspace'", specifier = ">=0.3.0" },
     { name = "langchain-openai", specifier = ">=0.3" },
     { name = "langfuse", marker = "extra == 'langfuse'", specifier = ">=3" },
     { name = "langgraph", specifier = ">=1.0,<2.0" },

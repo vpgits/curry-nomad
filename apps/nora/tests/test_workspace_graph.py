@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import sys
 
-from langchain_core.messages import HumanMessage
-from langchain_core.tools import StructuredTool, tool
+from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.tools import StructuredTool, ToolException, tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from nora.config import Settings
@@ -156,6 +156,41 @@ def test_workspace_loop_drives_async_only_mcp_tools():
         {"to": "priya@example.com", "body": "The cloves shipment is delayed two days."}
     ]
     assert "Sent the email to Priya" in result["messages"][-1].content
+
+
+def test_workspace_tool_failure_becomes_a_self_correction_message():
+    """A recoverable tool failure (ToolException) is converted by the narrow handle_workspace_error
+    into a ToolMessage the model reads and self-corrects from — the analytics-contrast teaching point.
+    Real MCP tools raise ToolException because the provider mints them with handle_tool_errors=False
+    (>=0.3.0); here a fake tool raises it directly to exercise the same ToolNode path."""
+
+    def provider(*, access_token):  # noqa: ARG001 — token unused by the fake
+        @tool
+        def send_email(to: str, body: str) -> str:
+            """Send an email on the operator's behalf."""
+            raise ToolException("recipient address not found")
+
+        return [send_email]
+
+    model = ScriptedChatModel(
+        [
+            ai_tool_call("send_email", {"to": "bad", "body": "hi"}, "c1"),
+            ai_final("I couldn't send it — the address looked wrong; can you confirm it?"),
+        ]
+    )
+    agent = build_workspace_agent(model=model, tools_provider=provider)
+    orch = _workspace_orch(agent)
+
+    result = orch.invoke(
+        {"messages": [HumanMessage("email someone")]},
+        {"configurable": {"thread_id": "w-err", "google_access_token": "tok"}},
+    )
+
+    # The ToolException flowed through our handle_workspace_error → a curated ToolMessage, and the
+    # model read it and produced a graceful final answer (self-correction, not a crash).
+    tool_msgs = [m for m in result["messages"] if isinstance(m, ToolMessage)]
+    assert any("Re-read the available tools" in (m.content or "") for m in tool_msgs)
+    assert "couldn't send it" in result["messages"][-1].content
 
 
 def test_workspace_degrades_without_a_token():

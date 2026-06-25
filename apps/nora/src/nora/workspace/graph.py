@@ -9,8 +9,9 @@ token), not bound once at compile time. So instead of compiling a static subgrap
 `build_workspace_agent(...)` that returns a callable; each call binds the per-run tools, compiles a
 one-shot loop, and runs it.
 
-Why a fresh client per run: `langchain-mcp-adapters` can't swap a per-request bearer on a long-lived
-`MultiServerMCPClient`, so we build a new one each turn with `headers={"Authorization": "Bearer …"}`.
+Why a fresh connection per run: `langchain-mcp-adapters` can't swap a per-request bearer on a
+long-lived client, so we mint a new per-run connection each turn with
+`headers={"Authorization": "Bearer …"}`.
 
 The default tools provider — the only place `langchain_mcp_adapters` is imported — is created lazily
 and imported lazily, so the base install never pulls the optional dependency and the offline test
@@ -23,7 +24,7 @@ import asyncio
 from collections.abc import Callable, Sequence
 
 from langchain.chat_models import init_chat_model
-from langchain_core.messages import BaseMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from langchain_core.tools import BaseTool, ToolException
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
@@ -70,20 +71,23 @@ def _make_mcp_tools_provider(settings: Settings) -> ToolsProvider:
     imported lazily so the base install (capability OFF) never needs the optional extra."""
 
     def provider(*, access_token: str) -> Sequence[BaseTool]:
-        from langchain_mcp_adapters.client import MultiServerMCPClient
+        from langchain_mcp_adapters.tools import load_mcp_tools
 
-        client = MultiServerMCPClient(
-            {
-                "google_workspace": {
-                    "transport": "streamable_http",
-                    "url": settings.workspace_mcp_url,
-                    "headers": {"Authorization": f"Bearer {access_token}"},
-                }
-            }
+        # A fresh per-run connection carrying THIS operator's bearer. `session=None` + `connection=`
+        # opens a stateless session per tool call, so nothing is held across the loop.
+        connection = {
+            "transport": "streamable_http",
+            "url": settings.workspace_mcp_url,
+            "headers": {"Authorization": f"Bearer {access_token}"},
+        }
+        # handle_tool_errors=False: make a failed MCP tool call RAISE a ToolException instead of the
+        # adapter (its >=0.3.0 default) converting it into a ToolMessage itself — so OUR narrow
+        # `handle_workspace_error` in ToolNode stays the demonstrated self-correction mechanism (the
+        # analytics-contrast teaching point). `load_mcp_tools` is async; we're in a sync graph node
+        # off the event loop, so a one-shot `asyncio.run` is safe (same bridge as the loop driver).
+        return asyncio.run(
+            load_mcp_tools(None, connection=connection, handle_tool_errors=False)
         )
-        # `get_tools()` is async; this runs inside a synchronous graph node (LangGraph executes sync
-        # nodes in a worker thread with no running event loop), so a one-shot `asyncio.run` is safe.
-        return asyncio.run(client.get_tools())
 
     return provider
 
@@ -96,6 +100,18 @@ def _compile_loop(model, tools: Sequence[BaseTool]):
         response = model_with_tools.invoke(
             [SystemMessage(content=WORKSPACE_SYSTEM_PROMPT), *state["messages"]]
         )
+        # Same termination guard as analytics (this loop reuses AnalyticsState's `remaining_steps`):
+        # if the step budget is nearly spent but the model still wants tools, stop with a plain
+        # answer instead of looping into a GraphRecursionError.
+        if state.get("remaining_steps", 99) <= 2 and getattr(response, "tool_calls", None):
+            return {
+                "messages": [
+                    AIMessage(
+                        content="I couldn't finish that within the available steps — try a more "
+                        "specific request."
+                    )
+                ]
+            }
         return {"messages": [response]}
 
     builder = StateGraph(AnalyticsState)

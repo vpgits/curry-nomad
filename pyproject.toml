@@ -52,7 +52,7 @@ aegra = [
 # NextAuth-minted session JWT. Kept an extra so the base install + offline suite stay
 # dependency-light (the flag-off path never imports either).
 workspace = [
-    "langchain-mcp-adapters>=0.1",
+    "langchain-mcp-adapters>=0.3.0",  # >=0.3.0: tools honor handle_tool_errors (see workspace/graph.py)
     "pyjwt>=2.9",
 ]
 
