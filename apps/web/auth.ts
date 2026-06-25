@@ -22,7 +22,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     Google({
       clientId: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      authorization: { params: { scope: "openid email profile" } },
+      // `prompt: select_account` always shows Google's account chooser, so an operator can pick or
+      // switch which account they sign in as (the standard multi-tenant login).
+      authorization: { params: { scope: "openid email profile", prompt: "select_account" } },
     }),
   ],
   callbacks: {

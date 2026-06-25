@@ -10,6 +10,7 @@ import { EncryptJWT, jwtDecrypt } from "jose";
 // The heavy scopes the incremental grant requests. MUST be a subset of what's configured on the
 // Google OAuth consent screen (Data Access), or the grant flow fails / shows un-consented scopes.
 export const GOOGLE_WORKSPACE_SCOPES = [
+  "https://www.googleapis.com/auth/gmail.readonly", // read inbox (summaries, "latest emails")
   "https://www.googleapis.com/auth/gmail.compose", // manage drafts + send
   "https://www.googleapis.com/auth/documents", // edit Google Docs
   "https://www.googleapis.com/auth/spreadsheets", // edit Google Sheets

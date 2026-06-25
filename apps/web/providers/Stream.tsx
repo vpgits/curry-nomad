@@ -11,7 +11,7 @@ import { useQueryState } from "nuqs";
 import { useSession } from "next-auth/react";
 import { toast } from "sonner";
 
-import { API_URL, ASSISTANT_ID } from "@/lib/config";
+import { API_URL, ASSISTANT_ID, AUTH_REQUIRED } from "@/lib/config";
 import type { NoraState, NoraUpdate } from "@/lib/types";
 import { sleep, tagThread } from "@/lib/threads";
 import { useThreads } from "./Thread";
@@ -31,14 +31,17 @@ export function StreamProvider({ children }: { children: ReactNode }) {
   const { getThreads, setThreads } = useThreads();
   // When the operator is signed in, attach their minted Aegra token so the backend (AUTH_TYPE=custom)
   // identifies them and scopes threads. Omitted when signed out / auth off → the keyless path is unchanged.
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
   const aegraToken = session?.aegraToken;
+  // Custom-auth mode: stay inert until signed in — don't fetch a thread's history without a token
+  // (it would 401). On sign-in the session updates and the real threadId flows back in.
+  const blocked = AUTH_REQUIRED && status !== "authenticated";
 
   const stream = useTypedStream({
     apiUrl: API_URL,
     assistantId: ASSISTANT_ID,
     ...(aegraToken ? { defaultHeaders: { Authorization: `Bearer ${aegraToken}` } } : {}),
-    threadId: threadId ?? null,
+    threadId: blocked ? null : (threadId ?? null),
     messagesKey: "messages",
     // Load prior messages + per-message checkpoint metadata (needed for edit/regenerate branching).
     fetchStateHistory: true,

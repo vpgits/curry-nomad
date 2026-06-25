@@ -27,6 +27,11 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-aegra}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aegra}
       POSTGRES_DB: ${POSTGRES_DB:-aegra}
+    ports:
+      # Publish to the host so the NATIVE `aegra dev` process (which runs outside the docker network)
+      # can reach Postgres at localhost:5432. The dockerized stack connects via the `postgres` service
+      # name on the internal network and is unaffected by this.
+      - "5432:5432"
     volumes:
       # Postgres 18 places PGDATA in a versioned subdir; mount the parent (not /data).
       - nora_postgres_data:/var/lib/postgresql
@@ -58,7 +63,7 @@ services:
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-}
       # Workspace capability (OFF by default): point Aegra at the MCP server and flip the flag in .env.
       NORA_WORKSPACE_ENABLED: ${NORA_WORKSPACE_ENABLED:-false}
-      NORA_WORKSPACE_MCP_URL: ${NORA_WORKSPACE_MCP_URL:-http://workspace-mcp:8001}
+      NORA_WORKSPACE_MCP_URL: ${NORA_WORKSPACE_MCP_URL:-http://workspace-mcp:8001/mcp}
       # Tracing is opt-in (empty = off). See the Langfuse note at the top of this file.
       OTEL_TARGETS: ${OTEL_TARGETS:-}
       LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-http://host.docker.internal:3001}
@@ -136,15 +141,11 @@ services:
     # (apps/web/lib/google.ts) — a tool only succeeds if the bearer token carries its scope. Levels:
     # gmail readonly|organize|drafts|send|full (cumulative), tasks readonly|manage|full, others
     # readonly|full. Matches the granted set: gmail.compose, documents, spreadsheets, tasks, drive.*.
+    # The image's ENTRYPOINT is `/bin/sh -c`, so the command must be ONE shell string (not separate
+    # flag args, which would hit sh directly → "Illegal option --"). Invokes the server the same way
+    # the image's default CMD does (`uv run main.py …`), plus our --permissions.
     command:
-      - "--transport"
-      - "streamable-http"
-      - "--permissions"
-      - "gmail:send"
-      - "docs:full"
-      - "sheets:full"
-      - "tasks:full"
-      - "drive:readonly"
+      - "uv run main.py --transport streamable-http --permissions gmail:send docs:full sheets:full tasks:full drive:readonly"
     environment:
       PORT: "8001"
       MCP_ENABLE_OAUTH21: "true"
@@ -155,12 +156,8 @@ services:
       GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
     ports:
       - "8001:8001"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8001/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
+    # No healthcheck: the image has no curl/`/health` route, and nothing depends on it being
+    # "healthy" — the workspace capability degrades to a text reply if the MCP server is down.
 
   web:
     build:

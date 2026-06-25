@@ -4,9 +4,11 @@ import { useEffect, type ComponentProps, type ComponentType } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useQueryState } from "nuqs";
+import { signIn, signOut, useSession } from "next-auth/react";
 import {
   ChevronRight,
   Home,
+  LogOut,
   Megaphone,
   MessageSquare,
   Package,
@@ -39,7 +41,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { useThreads } from "@/providers/Thread";
-import { STUDIO_ASSISTANT_ID } from "@/lib/config";
+import { AUTH_REQUIRED, STUDIO_ASSISTANT_ID } from "@/lib/config";
 import { cn } from "@/lib/utils";
 
 function threadGraphId(thread: Thread): string | undefined {
@@ -112,6 +114,72 @@ function NavRow({ item, active }: { item: NavItem; active: boolean }) {
         </Link>
       </SidebarMenuButton>
     </SidebarMenuItem>
+  );
+}
+
+// The sidebar footer account row. With auth on, it shows the signed-in Google operator + a standard
+// NextAuth signOut() (which also drops the Workspace grant so a re-login re-runs it). With auth off
+// (noop mode) it keeps the original presentational placeholder.
+function SidebarAccount() {
+  const { data: session, status } = useSession();
+
+  if (!AUTH_REQUIRED) {
+    return (
+      <SidebarMenuButton size="lg" className="pointer-events-none">
+        <span className="size-[26px] shrink-0 rounded-full bg-muted-foreground/40" />
+        <div className="grid flex-1 text-left leading-tight">
+          <span className="truncate text-[12px] font-medium">Operator</span>
+          <span className="truncate text-[10px] text-muted-foreground">Colombo HQ</span>
+        </div>
+      </SidebarMenuButton>
+    );
+  }
+
+  if (status !== "authenticated") {
+    return (
+      <SidebarMenuButton size="lg" onClick={() => signIn("google")}>
+        <span className="size-[26px] shrink-0 rounded-full bg-muted-foreground/40" />
+        <div className="grid flex-1 text-left leading-tight">
+          <span className="truncate text-[12px] font-medium">Sign in</span>
+          <span className="truncate text-[10px] text-muted-foreground">with Google</span>
+        </div>
+      </SidebarMenuButton>
+    );
+  }
+
+  const user = session.user;
+  const handleSignOut = async () => {
+    // Best-effort: clear the Workspace grant (Plane 2) before the standard NextAuth sign-out.
+    try {
+      await fetch("/api/google/disconnect", { method: "POST" });
+    } catch {
+      /* ignore — sign out regardless */
+    }
+    void signOut({ callbackUrl: "/" });
+  };
+
+  return (
+    <div className="flex items-center gap-2 px-1.5 py-1 group-data-[collapsible=icon]:px-0">
+      {user?.image ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={user.image} alt="" className="size-[26px] shrink-0 rounded-full" />
+      ) : (
+        <span className="size-[26px] shrink-0 rounded-full bg-muted-foreground/40" />
+      )}
+      <div className="grid min-w-0 flex-1 text-left leading-tight group-data-[collapsible=icon]:hidden">
+        <span className="truncate text-[12px] font-medium">{user?.name ?? "Operator"}</span>
+        <span className="truncate text-[10px] text-muted-foreground">{user?.email}</span>
+      </div>
+      <button
+        type="button"
+        onClick={handleSignOut}
+        title="Sign out"
+        aria-label="Sign out"
+        className="rounded p-1 text-muted-foreground hover:bg-sidebar-accent hover:text-foreground group-data-[collapsible=icon]:hidden"
+      >
+        <LogOut className="size-4" />
+      </button>
+    </div>
   );
 }
 
@@ -283,13 +351,7 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
       <SidebarFooter>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" className="pointer-events-none">
-              <span className="size-[26px] shrink-0 rounded-full bg-muted-foreground/40" />
-              <div className="grid flex-1 text-left leading-tight">
-                <span className="truncate text-[12px] font-medium">Operator</span>
-                <span className="truncate text-[10px] text-muted-foreground">Colombo HQ</span>
-              </div>
-            </SidebarMenuButton>
+            <SidebarAccount />
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>

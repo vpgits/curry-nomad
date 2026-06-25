@@ -9,16 +9,18 @@ import {
 } from "@langchain/langgraph-sdk/react-ui";
 import type { Message } from "@langchain/langgraph-sdk";
 import { useQueryState } from "nuqs";
+import { useSession } from "next-auth/react";
 import { ArrowUp, Sparkles, Square } from "lucide-react";
 import { toast } from "sonner";
 
 import { A2uiSurfaceView } from "@/components/A2uiSurfaceView";
 import { AppShell } from "@/components/app-shell";
+import { SignInGate } from "@/components/auth/sign-in-gate";
 import { NoraAvatar } from "@/components/thread/messages/ai";
 import { MarkdownText } from "@/components/thread/markdown";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { API_URL, STUDIO_ASSISTANT_ID } from "@/lib/config";
+import { API_URL, AUTH_REQUIRED, STUDIO_ASSISTANT_ID } from "@/lib/config";
 import { tagThread } from "@/lib/threads";
 import type { A2uiBlock, NoraState, NoraUpdate } from "@/lib/types";
 import { getContentString } from "@/lib/utils";
@@ -40,6 +42,11 @@ export default function StudioPage() {
   const [threadId, setThreadId] = useQueryState("t");
   const [input, setInput] = useState("");
   const { getThreads, setThreads } = useThreads();
+  // Custom-auth mode: attach the operator's token so the studio's own stream is authenticated too,
+  // and stay inert (no thread fetch) until signed in — same pattern as the hoisted StreamProvider.
+  const { data: session, status } = useSession();
+  const aegraToken = session?.aegraToken;
+  const blocked = AUTH_REQUIRED && status !== "authenticated";
 
   const stream = useStream<
     NoraState,
@@ -47,7 +54,8 @@ export default function StudioPage() {
   >({
     apiUrl: API_URL,
     assistantId: STUDIO_ASSISTANT_ID,
-    threadId: threadId ?? null,
+    ...(aegraToken ? { defaultHeaders: { Authorization: `Bearer ${aegraToken}` } } : {}),
+    threadId: blocked ? null : (threadId ?? null),
     messagesKey: "messages",
     fetchStateHistory: true,
     onThreadId: (id) => void setThreadId(id),
@@ -111,6 +119,14 @@ export default function StudioPage() {
       },
     );
   };
+
+  if (AUTH_REQUIRED && status !== "authenticated") {
+    return (
+      <AppShell title="Studio" subtitle="Sign in to continue" hideAsk>
+        <SignInGate loading={status === "loading"} />
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell title="Studio" subtitle="A2UI · the model authors the UI" hideAsk>

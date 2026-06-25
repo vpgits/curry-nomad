@@ -13,6 +13,7 @@ import { RouteMapCard } from "@/components/operations/RouteMapCard";
 import { ScriptTimeline } from "@/components/ScriptTimeline";
 import { StoryboardFilmstrip } from "@/components/StoryboardFilmstrip";
 import { VideoBriefCard } from "@/components/VideoBriefCard";
+import { WorkspaceActionsCard } from "@/components/workspace/workspace-actions-card";
 import { cn, getContentString, getReasoningString } from "@/lib/utils";
 import { useStreamContext } from "@/providers/Stream";
 import { MarkdownText } from "../markdown";
@@ -30,6 +31,7 @@ const UI_COMPONENTS = {
   marketing_critique: CritiqueCard,
   marketing_render: MarketingRenderCard,
   route_map: RouteMapCard,
+  workspace_actions: WorkspaceActionsCard,
 };
 // ui.name values that mark a turn as the marketing workflow (drives the ModeChip).
 const MARKETING_UI = new Set([
@@ -50,7 +52,7 @@ export function NoraAvatar() {
   );
 }
 
-type TurnMode = "analytics" | "marketing" | "routing";
+type TurnMode = "analytics" | "marketing" | "routing" | "workspace";
 
 // The mode chip beside "Nora": ink pill for the analytics agent, accent-tint pill for the marketing
 // workflow, info-tint for the deterministic routing capability — the paradigms explicit at a glance.
@@ -65,6 +67,12 @@ function ModeChip({ mode }: { mode: TurnMode }) {
     return (
       <span className="rounded-full border border-info-edge bg-info-tint px-2 py-px text-[9.5px] font-semibold text-info-text">
         Operations
+      </span>
+    );
+  if (mode === "workspace")
+    return (
+      <span className="rounded-full border border-info-edge bg-info-tint px-2 py-px text-[9.5px] font-semibold text-info-text">
+        Workspace agent
       </span>
     );
   return (
@@ -121,7 +129,9 @@ export function AssistantMessage({
     ? "marketing"
     : uiForMessage.some((ui) => ui.name === "route_map")
       ? "routing"
-      : "analytics";
+      : uiForMessage.some((ui) => ui.name === "workspace_actions")
+        ? "workspace"
+        : "analytics";
 
   const [copied, setCopied] = useState(false);
   const copy = () => {

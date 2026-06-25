@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useQueryState } from "nuqs";
+import { useSession } from "next-auth/react";
 import { ArrowDown, ArrowUp, Square } from "lucide-react";
 import type { Message } from "@langchain/langgraph-sdk";
 
@@ -11,9 +12,10 @@ import { ConceptPicker } from "@/components/ConceptPicker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { MarketingInterrupt } from "@/lib/types";
-import { WORKSPACE_ENABLED } from "@/lib/config";
+import { AUTH_REQUIRED, WORKSPACE_ENABLED } from "@/lib/config";
 import { getWorkspaceAccessToken } from "@/lib/workspace-client";
 import { useStreamContext } from "@/providers/Stream";
+import { SignInGate } from "@/components/auth/sign-in-gate";
 import { WorkspaceConnect } from "@/components/workspace/workspace-connect";
 import { AskNoraModeLane } from "./AskNoraModeLane";
 import { AssistantMessage, NoraAvatar } from "./messages/ai";
@@ -32,6 +34,7 @@ export function Thread() {
   const stream = useStreamContext();
   const [threadId] = useQueryState("threadId");
   const [input, setInput] = useState("");
+  const { status } = useSession();
 
   const messages = stream.messages.filter((m) => !m.id?.startsWith("do-not-render-"));
   const interrupt = stream.interrupt?.value as MarketingInterrupt | undefined;
@@ -70,6 +73,15 @@ export function Thread() {
       },
     );
   };
+
+  // Custom-auth mode: Nora's threads are per-operator, so require sign-in before the chat.
+  if (AUTH_REQUIRED && status !== "authenticated") {
+    return (
+      <AppShell title="Ask Nora" subtitle="Sign in to continue" hideAsk>
+        <SignInGate loading={status === "loading"} />
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell

@@ -16,3 +16,8 @@ export const OPS_API_URL = process.env.NEXT_PUBLIC_OPS_API_URL ?? "http://localh
 // Gates the optional Google Workspace capability's UI (the "Connect Google Workspace" affordance and
 // the per-run token fetch). Mirrors the backend's NORA_WORKSPACE_ENABLED flag; OFF by default.
 export const WORKSPACE_ENABLED = process.env.NEXT_PUBLIC_WORKSPACE_ENABLED === "true";
+
+// When true, the frontend requires a signed-in session before it calls Aegra — matching the backend's
+// AUTH_TYPE=custom. The shared sidebar/chat are gated on sign-in instead of 401-ing. OFF by default so
+// the keyless (AUTH_TYPE=noop) path is completely unchanged.
+export const AUTH_REQUIRED = process.env.NEXT_PUBLIC_AUTH_REQUIRED === "true";
