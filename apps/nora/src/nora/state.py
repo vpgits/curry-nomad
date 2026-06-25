@@ -27,6 +27,7 @@ from typing import Annotated, NotRequired, TypedDict
 
 from langgraph.graph.message import MessagesState, add_messages
 from langgraph.graph.ui import AnyUIMessage, ui_message_reducer
+from langgraph.managed import RemainingSteps
 
 
 def reset_or_extend(current: list, update) -> list:
@@ -57,9 +58,16 @@ class OrchestratorState(MessagesState):
 
 
 class AnalyticsState(TypedDict):
-    """Analytics agent subgraph state — just the running message thread."""
+    """Analytics agent subgraph state — the running message thread plus the step budget.
+
+    `remaining_steps` is a LangGraph *managed* value (auto-populated from the run's recursion_limit,
+    no manual seeding). The llm node reads it to stop gracefully with a plain answer when the budget
+    is nearly spent, rather than looping into a `GraphRecursionError` — which, since analytics runs as
+    a subgraph node, would otherwise crash the whole turn. (The workspace agent reuses this state, so
+    it gets the same guard.)"""
 
     messages: Annotated[list, add_messages]
+    remaining_steps: RemainingSteps
 
 
 class MarketingState(TypedDict):

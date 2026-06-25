@@ -90,6 +90,22 @@ def test_loop_terminates_on_direct_answer():
     assert not any(isinstance(m, ToolMessage) for m in result["messages"])
 
 
+def test_terminates_gracefully_at_step_budget():
+    """A model that never stops calling tools must degrade to a plain answer when the step budget is
+    nearly spent — NOT raise GraphRecursionError (which, since analytics runs as a subgraph node,
+    would crash the whole turn). The `remaining_steps` guard in llm_node enforces this."""
+    # Always asks for a harmless tool; without the guard this loops until GraphRecursionError.
+    model = ScriptedChatModel([ai_tool_call("list_tables", {}, f"c{i}") for i in range(12)])
+    graph = build_analytics_graph(model=model)
+    result = graph.invoke(
+        {"messages": [HumanMessage(content="loop forever")]},
+        {"recursion_limit": 8},
+    )
+    final = result["messages"][-1]
+    assert not getattr(final, "tool_calls", None)  # ended cleanly, not mid tool-call
+    assert "within the available steps" in final.content
+
+
 @pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="requires a live LLM key")
 def test_live_agent_answers_a_data_question():
     graph = build_analytics_graph()

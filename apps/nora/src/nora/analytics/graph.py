@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Literal
 
 from langchain.chat_models import init_chat_model
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.runtime import Runtime
@@ -109,6 +109,20 @@ def build_analytics_graph(
             definitions = "\n".join(item.value["text"] for item in items)
         system = build_system_prompt(table_names, settings, definitions=definitions)
         response = model_with_tools.invoke([SystemMessage(content=system), *state["messages"]])
+        # Termination guard (mirrors the prebuilt create_agent): if the step budget is nearly spent
+        # but the model still wants to call tools, stop with a plain answer instead of looping into a
+        # GraphRecursionError. Analytics runs as a subgraph node, so an unhandled recursion error would
+        # crash the whole turn; degrading to text keeps the turn alive. `remaining_steps` is a managed
+        # value, auto-populated from the run's recursion_limit.
+        if state.get("remaining_steps", 99) <= 2 and getattr(response, "tool_calls", None):
+            return {
+                "messages": [
+                    AIMessage(
+                        content="I wasn't able to finish that analysis within the available steps. "
+                        "Try narrowing the question — a specific metric, product, or time window."
+                    )
+                ]
+            }
         return {"messages": [response]}
 
     builder = StateGraph(AnalyticsState)
