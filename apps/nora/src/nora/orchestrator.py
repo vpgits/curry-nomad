@@ -1,14 +1,14 @@
 """The orchestrator graph — routing (the entry point).
 
-    START → route → (Command goto) → analytics | marketing | clarify → END
+    START → route → (Command goto) → analytics | marketing | routing | workspace | clarify → END
 
 A cheap classifier (router model) decides which capability handles the request, then a
-`Command(goto=...)` dispatches to it. The two capabilities are *compiled subgraphs invoked
-inside the orchestrator nodes* — passing the node's `config` through means a HITL interrupt
-inside the marketing subgraph bubbles up and pauses the whole orchestrator, and a
-`Command(resume=...)` on the same thread_id flows back down into it. That's the canonical demo:
-ask a data question → get an answer → "make a video ad for it" → pause for review → finish,
-all on one thread.
+`Command(goto=...)` dispatches to it. Capabilities are a deliberate mix: a compiled-subgraph node
+(analytics), imperative `.invoke()`/agent nodes (marketing, workspace), and a deterministic service
+node (routing). Passing each node's `config` through means a HITL interrupt inside the marketing
+subgraph bubbles up and pauses the whole orchestrator, and a `Command(resume=...)` on the same
+thread_id flows back down into it. That's the canonical demo: ask a data question → get an answer →
+"make a video ad for it" → pause for review → finish, all on one thread.
 """
 
 from __future__ import annotations
@@ -197,9 +197,14 @@ def build_orchestrator(
         state: OrchestratorState,
     ) -> Command[Literal["analytics", "marketing", "routing", "workspace", "clarify"]]:
         classifier = router_model.with_structured_output(RouteDecision)
-        decision: RouteDecision = classifier.invoke(
-            [SystemMessage(content=ROUTER_INSTRUCTIONS), *state["messages"]]
-        )
+        try:
+            decision: RouteDecision = classifier.invoke(
+                [SystemMessage(content=ROUTER_INSTRUCTIONS), *state["messages"]]
+            )
+        except Exception as exc:  # noqa: BLE001 — a flaky classifier shouldn't crash the turn; clarify
+            log.info("route.failed", error=str(exc))
+            fallback = RouteDecision(capability="clarify", reason="router unavailable")
+            return Command(goto="clarify", update={"route": fallback.model_dump()})
         log.info("route.decided", capability=decision.capability, reason=decision.reason)
         # Store the dump, not the model — graph state is JSON-native (see nora/state.py).
         return Command(goto=decision.capability, update={"route": decision.model_dump()})

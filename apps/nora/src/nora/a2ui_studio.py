@@ -50,7 +50,7 @@ def _author_surface(model, answer: str, query_results: str) -> A2uiSurface | Non
     load-bearing for the text answer."""
     if not answer.strip():
         return None
-    context = f"Answer:\n{answer}"
+    context = f"Answer:\n{answer[:4000]}"  # cap both inputs so a long answer can't blow the token budget
     if query_results:
         context += f"\n\nQuery results the answer is based on:\n{query_results[:2000]}"
     try:
@@ -99,7 +99,11 @@ def build_a2ui_graph(
         surface = _author_surface(author_model, answer, _sql_results_from_messages(messages))
         if surface is None:
             return {}
-        push_ui_message("a2ui_surface", surface.model_dump(), message=final)
+        data = surface.model_dump()
+        # Persist the surface onto the message (like the analytics_dashboard node) so it survives a
+        # thread rehydrate from the platform store, not only the live UI stream.
+        final.additional_kwargs = {**(final.additional_kwargs or {}), "a2ui_surface": data}
+        push_ui_message("a2ui_surface", data, message=final)
         return {"messages": [final]}  # same id → no-op merge; mirrors the analytics_dashboard node
 
     builder = StateGraph(OrchestratorState, context_schema=Context)

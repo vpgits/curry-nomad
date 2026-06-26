@@ -145,6 +145,20 @@ def test_ambiguous_request_routes_to_clarify():
     assert "which would you like" in result["messages"][-1].content.lower()
 
 
+def test_router_failure_degrades_to_clarify():
+    """A flaky classifier (raises during classification) shouldn't crash the turn — default to
+    clarify. The empty-script fake raises on .invoke(), standing in for any router failure."""
+    orch = build_orchestrator(
+        router_model=_router(),  # no scripted decisions → .invoke() raises
+        analytics_graph=_dummy_analytics(),
+        marketing_graph=build_marketing_graph(model=_passing_model(), auto_approve=True),
+        checkpointer=InMemorySaver(),
+    )
+    result = orch.invoke({"messages": [HumanMessage("anything at all")]}, _cfg("r-fail"))
+    assert result["route"]["capability"] == "clarify"
+    assert "which would you like" in result["messages"][-1].content.lower()
+
+
 def test_canonical_demo_flow_on_one_thread():
     """ask for the top product → answer → 'make a video ad for it' → pause for review → finish."""
     orch = build_orchestrator(

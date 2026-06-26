@@ -102,10 +102,13 @@ def build_analytics_graph(
         # Long-term memory (M3): pull metric definitions relevant to the question from the
         # Store via runtime.store, and fold them into the system prompt so they shape the SQL.
         definitions = ""
-        store = getattr(runtime, "store", None)
-        if store is not None:
+        # Deliberately the runtime-injected store, NOT the build-time `store` param: on the platform
+        # (Aegra) the store is injected at runtime and lives on `runtime`, so the build closure's may
+        # be None. Named distinctly so this intent isn't "fixed" into a bug.
+        runtime_store = getattr(runtime, "store", None)
+        if runtime_store is not None:
             query = _last_user_text(state["messages"]) or "metric definitions"
-            items = store.search(DEFINITIONS, query=query, limit=3)
+            items = runtime_store.search(DEFINITIONS, query=query, limit=3)
             definitions = "\n".join(item.value["text"] for item in items)
         system = build_system_prompt(table_names, settings, definitions=definitions)
         response = model_with_tools.invoke([SystemMessage(content=system), *state["messages"]])

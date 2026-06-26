@@ -87,6 +87,6 @@ class MarketingState(TypedDict):
     # Send fan-in (gather), but resettable so revisions don't accumulate stale prompts.
     shot_prompts: Annotated[list[dict], reset_or_extend]  # ShotPrompt
     critique: NotRequired[dict]  # Critique
-    revision_count: int
+    revision_count: NotRequired[int]  # seeded by initial_marketing_state; nodes read it defensively
     brief: NotRequired[dict]  # VideoBrief
     render_result: NotRequired[dict]
