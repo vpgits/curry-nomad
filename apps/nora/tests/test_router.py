@@ -215,6 +215,36 @@ def test_canonical_demo_flow_on_one_thread():
     assert "Ceylon Cinnamon" in brief["product_name"]
 
 
+def test_supervisor_suppresses_re_delegation_to_answered_capability():
+    """Over-delegation guard: the supervisor scripts TWO to_analytics handoffs, but analytics already
+    answered after the first, so the repeat is suppressed and analytics runs ONCE. (The analytics fake
+    is scripted with a single response — a second run would exhaust it and raise, so this also proves
+    analytics didn't run twice.)"""
+    orch = build_orchestrator(
+        supervisor_model=ScriptedChatModel(
+            [
+                ai_tool_call("to_analytics", {"task": "best seller"}, "h1"),
+                ai_tool_call("to_analytics", {"task": "best seller again"}, "h2"),  # over-delegation
+            ]
+        ),
+        analytics_graph=build_analytics_graph(
+            model=ScriptedChatModel([ai_final("Top seller: Ceylon Cinnamon.")])
+        ),
+        marketing_graph=build_marketing_graph(model=_passing_model(), auto_approve=True),
+        checkpointer=InMemorySaver(),
+    )
+    result = orch.invoke({"messages": [HumanMessage("best seller?")]}, _cfg("redeleg"))
+    # Analytics ran once; its answer stands as the final message (the repeat handoff was discarded).
+    assert result["messages"][-1].content == "Top seller: Ceylon Cinnamon."
+    handoffs = [
+        tc
+        for m in result["messages"]
+        for tc in (getattr(m, "tool_calls", None) or [])
+        if tc["name"] == "to_analytics"
+    ]
+    assert len(handoffs) == 1  # only the first handoff landed; the re-delegation was suppressed
+
+
 @pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="requires a live LLM key")
 def test_live_orchestrator_answers_a_data_question():
     from langchain_core.messages import AIMessage

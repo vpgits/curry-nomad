@@ -94,7 +94,8 @@ SUPERVISOR_INSTRUCTIONS = (
     "2. You may delegate more than once to CHAIN capabilities — e.g. analyze data, THEN create a "
     "brief from the result. Delegate one capability at a time; its result comes back to you.\n"
     "3. When the specialists have fully handled the request, STOP — do not call another tool and "
-    "do not restate their answer; just end.\n"
+    "do not restate their answer; just end. NEVER delegate to a specialist that has already "
+    "answered this turn.\n"
     "4. If the request is ambiguous or matches no capability, do NOT call a tool — reply with one "
     "short clarifying question (ask whether they want a data answer or a video ad, and for which "
     "product)."
@@ -128,6 +129,23 @@ def _handoff_count(messages: list) -> int:
         for tc in (getattr(m, "tool_calls", None) or [])
         if tc.get("name") in HANDOFF_TARGET
     )
+
+
+def _delegated_targets_this_turn(messages: list) -> set[str]:
+    """The capabilities the supervisor has already delegated to SINCE the last user message. Used to
+    suppress re-delegating to a capability that already ran this turn — the supervisor (a cheap model)
+    can otherwise loop, handing off to analytics again right after it answered (the "ran twice" bug).
+    Each capability runs at most once per turn; a DIFFERENT target (the analytics→marketing compose)
+    is still allowed."""
+    targets: set[str] = set()
+    for m in reversed(messages):
+        if isinstance(m, HumanMessage):
+            break
+        for tc in getattr(m, "tool_calls", None) or []:
+            name = tc.get("name")
+            if name in HANDOFF_TARGET:
+                targets.add(HANDOFF_TARGET[name])
+    return targets
 
 
 def _capability_answered_this_turn(messages: list) -> bool:
@@ -324,14 +342,25 @@ def build_orchestrator(
             return Command(goto=END, update={"messages": [AIMessage(content=CLARIFY_TEXT)]})
 
         calls = [c for c in (getattr(ai, "tool_calls", None) or []) if c.get("name") in HANDOFF_TARGET]
-        if calls:
-            first = calls[0]
+        # Loop guard: a capability runs at most ONCE per turn. The supervisor (a cheap model) can
+        # otherwise re-delegate to a capability that already answered (the "ran twice" bug) — drop
+        # those repeats. A handoff to a DIFFERENT capability (the analytics→marketing compose) is
+        # still fresh and allowed.
+        already = _delegated_targets_this_turn(messages)
+        fresh = [c for c in calls if HANDOFF_TARGET[c["name"]] not in already]
+        if fresh:
+            first = fresh[0]
             target = HANDOFF_TARGET[first["name"]]
-            # Ack EVERY tool-call the model made (the next supervisor turn rejects an unanswered
-            # tool_call), but hand off only to the first — capabilities run one at a time.
+            # Ack EVERY tool-call the model made (an unanswered tool_call breaks the next supervisor
+            # turn), but hand off to only the first fresh one — capabilities run one at a time.
             acks = [
                 ToolMessage(
-                    content=f"Handing off to {HANDOFF_TARGET[c['name']]}.", tool_call_id=c["id"]
+                    content=(
+                        f"Handing off to {HANDOFF_TARGET[c['name']]}."
+                        if c is first
+                        else f"Skipped {HANDOFF_TARGET[c['name']]} (one handoff at a time)."
+                    ),
+                    tool_call_id=c["id"],
                 )
                 for c in calls
             ]
@@ -341,6 +370,16 @@ def build_orchestrator(
                 goto=target,
                 update={"messages": [ai, *acks], "handoff": {"target": target, **args}},
             )
+
+        if calls:
+            # The model ONLY tried to re-run capabilities that already answered this turn → it's
+            # looping. Stop: discard this handoff message (so its dangling tool-calls aren't persisted)
+            # and end on the answer that's already in the thread.
+            log.info(
+                "supervisor.redelegation_suppressed",
+                targets=sorted({HANDOFF_TARGET[c["name"]] for c in calls}),
+            )
+            return Command(goto=END)
 
         # No handoff → the turn is done. Stay SILENT if a capability already answered (its answer is
         # the reply); otherwise this is a clarification (or a no-capability reply) — surface the text.
