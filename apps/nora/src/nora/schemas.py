@@ -164,9 +164,10 @@ class AnalyticsDashboard(BaseModel):
 # --- A2UI-style authored surface (the dynamic-schema "LLM authors the UI" showcase) ----
 #
 # Unlike AnalyticsDashboard (a fixed stats/table/chart layout), here the model COMPOSES an ordered
-# list of catalog blocks to fit the answer — it authors the surface. Rendered over the native
-# push_ui_message channel by the /studio surface's catalog. A small, typed block vocabulary keeps
-# this reliable for structured output (vs. an arbitrary recursive component tree).
+# list of catalog blocks to fit the answer — it authors the surface. Pushed as the `a2ui_surface`
+# card over the native push_ui_message channel (the analytics path's "Author UI" output mode) and
+# rendered by the web `A2uiSurfaceView`. A small, typed block vocabulary keeps this reliable for
+# structured output (vs. an arbitrary recursive component tree).
 
 
 class A2uiMetric(BaseModel):

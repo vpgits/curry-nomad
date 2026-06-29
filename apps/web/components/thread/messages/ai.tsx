@@ -1,11 +1,22 @@
 "use client";
 
 import { useState, type ComponentProps, type ReactNode } from "react";
-import { Brain, Check, ChevronRight, Copy, Database, RefreshCw, Table2 } from "lucide-react";
+import {
+  ArrowRight,
+  Brain,
+  Check,
+  ChevronRight,
+  Copy,
+  CornerUpLeft,
+  Database,
+  RefreshCw,
+  Table2,
+} from "lucide-react";
 import type { Message } from "@langchain/langgraph-sdk";
 
 import { LoadExternalComponent } from "@langchain/langgraph-sdk/react-ui";
 
+import { A2uiSurfaceView } from "@/components/A2uiSurfaceView";
 import { AnalyticsDashboard } from "@/components/AnalyticsDashboard";
 import { CritiqueCard } from "@/components/CritiqueCard";
 import { MarketingRenderCard } from "@/components/MarketingRenderCard";
@@ -25,6 +36,10 @@ import { BranchSwitcher } from "./shared";
 // to ride additional_kwargs); each ui.name keys into this map.
 const UI_COMPONENTS = {
   analytics_dashboard: AnalyticsDashboard,
+  // The "Author UI" output mode: when the composer toggles ui_mode="authored", the analytics path
+  // pushes this LLM-composed surface (A2uiSurface) instead of the fixed analytics_dashboard. It
+  // matches none of the marketing/routing/workspace sets below, so the turn stays labeled analytics.
+  a2ui_surface: A2uiSurfaceView,
   video_brief: VideoBriefCard,
   marketing_storyboard: StoryboardFilmstrip,
   marketing_script_timeline: ScriptTimeline,
@@ -82,22 +97,292 @@ function ModeChip({ mode }: { mode: TurnMode }) {
   );
 }
 
-// A blank avatar-width spacer, so continuation rows (the agent's tool steps) align under the one
-// Nora avatar at the top of the turn instead of each getting their own.
-function AvatarSpacer() {
-  return <div className="size-8 shrink-0" />;
+// ── Supervisor → subagent handoffs ─────────────────────────────────────────────────────────────
+// The backend is a supervisor that delegates to a capability via a handoff tool-call (`to_analytics`
+// / `to_marketing` / `to_workspace`, args carry the delegated `task`). A handoff AI message is the
+// supervisor→subagent boundary; every message after it (until the next handoff) belongs to that
+// subagent. We render the boundary as a DelegationBoundary and the subagent's run as a SubagentLane.
+
+type HandoffTarget = "analytics" | "marketing" | "workspace";
+
+const HANDOFF_TARGETS: Record<string, HandoffTarget> = {
+  to_analytics: "analytics",
+  to_marketing: "marketing",
+  to_workspace: "workspace",
+};
+
+// Per-target visual language (matches ModeChip): ink for analytics, brand tint for marketing, info
+// tint for workspace — used to colour the boundary marker and the lane rail/label.
+const TARGET: Record<
+  HandoffTarget,
+  { label: string; pill: string; rail: string; accent: string; badge: string; badgeIcon: string }
+> = {
+  analytics: {
+    label: "Analytics agent",
+    pill: "bg-ink text-ink-foreground",
+    rail: "bg-ink/25",
+    accent: "text-foreground",
+    badge: "border-border bg-muted",
+    badgeIcon: "text-foreground/70",
+  },
+  marketing: {
+    label: "Marketing workflow",
+    pill: "border border-brand-edge bg-brand-tint text-brand-text",
+    rail: "bg-brand-edge",
+    accent: "text-brand-text",
+    badge: "border-brand-edge bg-brand-tint",
+    badgeIcon: "text-brand-text",
+  },
+  workspace: {
+    label: "Workspace agent",
+    pill: "border border-info-edge bg-info-tint text-info-text",
+    rail: "bg-info-edge",
+    accent: "text-info-text",
+    badge: "border-info-edge bg-info-tint",
+    badgeIcon: "text-info-text",
+  },
+};
+
+// A supervisor→subagent handoff: an AI message whose tool-calls include a `to_*` capability tool.
+// The backend honours only the FIRST such call per message (the rest get "Skipped" acks), so we
+// read the first one; its `task` arg is the delegated instruction shown under the boundary.
+function handoffOf(message: Message): { target: HandoffTarget; task?: string } | null {
+  const toolCalls = (message as { tool_calls?: ToolCall[] }).tool_calls ?? [];
+  for (const c of toolCalls) {
+    const target = HANDOFF_TARGETS[c.name];
+    if (target) {
+      const task = typeof c.args?.task === "string" ? c.args.task : undefined;
+      return { target, task };
+    }
+  }
+  return null;
 }
 
-export function AssistantMessage({
+type Segment =
+  | { kind: "boundary"; key: string; target: HandoffTarget; task?: string }
+  | { kind: "lane"; key: string; target: HandoffTarget; messages: Message[] }
+  | { kind: "plain"; key: string; message: Message };
+
+// Walk a turn's assistant messages into ordered segments that make the supervisor↔subagent boundary
+// explicit. On a handoff message: close any open lane, emit a DelegationBoundary, open a new lane
+// for that target. Otherwise: push the message into the open lane (the subagent's work), or render
+// it plainly when no lane is open (a supervisor clarification). The trailing lane is flushed at end.
+function segmentTurn(messages: Message[]): Segment[] {
+  const segments: Segment[] = [];
+  let lane: { key: string; target: HandoffTarget; messages: Message[] } | null = null;
+  const closeLane = () => {
+    const cur = lane;
+    if (cur) {
+      segments.push({ kind: "lane", key: cur.key, target: cur.target, messages: cur.messages });
+      lane = null;
+    }
+  };
+  messages.forEach((message, i) => {
+    const handoff = handoffOf(message);
+    if (handoff) {
+      closeLane();
+      // Keyed off the handoff message's (stable) id, so a double-delegation to the same target
+      // renders as two distinct boundaries + lanes rather than colliding on one key.
+      const base = message.id ?? `seg-${i}`;
+      segments.push({
+        kind: "boundary",
+        key: `b-${base}`,
+        target: handoff.target,
+        task: handoff.task,
+      });
+      lane = { key: `l-${base}`, target: handoff.target, messages: [] };
+      return;
+    }
+    const open = lane;
+    if (open) open.messages.push(message);
+    else segments.push({ kind: "plain", key: `p-${message.id ?? `seg-${i}`}`, message });
+  });
+  closeLane();
+  return segments;
+}
+
+// One assistant TURN: a single Nora header (avatar + name + ModeChip), then the ordered handover
+// segments — delegation boundaries and the subagent lanes they open, plus any plain supervisor text.
+// A compose (analytics→marketing) reads as two boundaries + two lanes; a double-delegation to the
+// same target reads as two of each — faithful to whatever the supervisor actually did this turn.
+export function AssistantTurn({
+  messages,
+  isLoading,
+  isActive,
+}: {
+  messages: Message[];
+  isLoading: boolean;
+  // True only for the live, currently-streaming turn (the last turn while the stream is loading).
+  // Gates the "still working" affordances (empty-lane dots, deferring the lane's "back to
+  // supervisor" footer) so finished turns above never flicker when a NEW turn starts streaming.
+  isActive: boolean;
+}) {
+  const stream = useStreamContext();
+  const segments = segmentTurn(messages);
+
+  // The turn's headline chip: the first capability it delegated to; else inferred from the cards it
+  // pushed (route_map → routing); else a pure-supervisor turn (a clarification) → no capability chip.
+  const firstHandoff = messages.reduce<ReturnType<typeof handoffOf>>(
+    (found, m) => found ?? handoffOf(m),
+    null,
+  );
+  const turnIds = new Set(messages.map((m) => m.id));
+  const cards = (stream.values.ui ?? []).filter((ui) =>
+    turnIds.has((ui.metadata as { message_id?: string } | undefined)?.message_id),
+  );
+  const mode: TurnMode | null = firstHandoff
+    ? firstHandoff.target
+    : cards.some((ui) => MARKETING_UI.has(ui.name))
+      ? "marketing"
+      : cards.some((ui) => ui.name === "route_map")
+        ? "routing"
+        : cards.some((ui) => ui.name === "workspace_actions")
+          ? "workspace"
+          : null;
+
+  return (
+    <div className="flex items-start gap-3">
+      <NoraAvatar />
+      <div className="min-w-0 flex-1 space-y-3">
+        <div className="flex items-center gap-2">
+          <span className="text-[13px] font-semibold">Nora</span>
+          {mode && <ModeChip mode={mode} />}
+        </div>
+
+        {segments.map((seg, i) => {
+          if (seg.kind === "boundary") {
+            return <DelegationBoundary key={seg.key} target={seg.target} task={seg.task} />;
+          }
+          if (seg.kind === "lane") {
+            // The trailing lane of the live turn may still be receiving the subagent's output, so
+            // defer its "back to supervisor" footer until the stream settles; older lanes show it.
+            const trailing = i === segments.length - 1;
+            return (
+              <SubagentLane
+                key={seg.key}
+                target={seg.target}
+                messages={seg.messages}
+                isLoading={isLoading}
+                active={isActive && trailing}
+              />
+            );
+          }
+          return (
+            <MessageBody
+              key={seg.key}
+              message={seg.message}
+              isLoading={isLoading}
+              continuation={false}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// The supervisor→subagent boundary, drawn as a prominent marker (NOT a tool-step card): an arrow
+// motif + "Supervisor → <capability>" in the target's colour, with the delegated task as a subtitle.
+// The "Handing off to…" ack ToolMessage is folded in here (it's never rendered as its own card —
+// it's only ever surfaced via a tool-call's resultFor lookup, and a handoff call isn't rendered).
+function DelegationBoundary({ target, task }: { target: HandoffTarget; task?: string }) {
+  const t = TARGET[target];
+  return (
+    <div className="flex items-start gap-2.5">
+      <div
+        className={cn(
+          "flex size-[22px] shrink-0 items-center justify-center rounded-md border",
+          t.badge,
+        )}
+      >
+        <ArrowRight className={cn("size-3.5", t.badgeIcon)} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5 text-[12px] font-semibold">
+          <span className="text-muted-foreground">Supervisor</span>
+          <ArrowRight className="size-3 shrink-0 text-muted-foreground/60" />
+          <span className={t.accent}>{t.label}</span>
+        </div>
+        {task && <p className="mt-1 text-[12px] leading-snug text-muted-foreground">{task}</p>}
+      </div>
+    </div>
+  );
+}
+
+// The delegated capability's run, wrapped in a distinct lane: a left rail in the target's colour, a
+// persistent capability label, the subagent's message bodies (tool steps + answer + reasoning +
+// pushed gen-UI cards), and a subtle "back to supervisor" footer once control has returned.
+function SubagentLane({
+  target,
+  messages,
+  isLoading,
+  active,
+}: {
+  target: HandoffTarget;
+  messages: Message[];
+  isLoading: boolean;
+  // The live, trailing lane — defer the footer and show working dots while empty.
+  active: boolean;
+}) {
+  const t = TARGET[target];
+  return (
+    <div className="relative pl-4">
+      <div className={cn("absolute top-0.5 bottom-0.5 left-[3px] w-0.5 rounded-full", t.rail)} />
+      <div className="mb-2 flex items-center gap-1.5">
+        <span className={cn("rounded-full px-2 py-px text-[9.5px] font-semibold", t.pill)}>
+          {t.label}
+        </span>
+      </div>
+      {messages.length > 0 ? (
+        <div className="space-y-2.5">
+          {messages.map((m, i) => (
+            <MessageBody
+              key={m.id ?? `body-${i}`}
+              message={m}
+              isLoading={isLoading}
+              continuation={i > 0}
+            />
+          ))}
+        </div>
+      ) : (
+        active && <WorkingDots />
+      )}
+      {messages.length > 0 && !active && (
+        <div className="mt-2.5 flex items-center gap-1 text-[10.5px] font-medium text-muted-foreground/70">
+          <CornerUpLeft className="size-3" />
+          back to supervisor
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WorkingDots() {
+  return (
+    <div className="flex items-center gap-1 py-1">
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          className="size-1.5 animate-bounce rounded-full bg-muted-foreground/50"
+          style={{ animationDelay: `${i * 0.15}s` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+// One assistant message's body — reasoning chain, answer bubble, tool steps, pushed gen-UI cards,
+// and the copy/regenerate/branch actions — WITHOUT the Nora avatar/header (drawn once per turn by
+// AssistantTurn). Used for both subagent-lane messages and plain supervisor messages. `continuation`
+// threads the tool-step rail: the first body in a lane starts a fresh rail, later ones extend it.
+function MessageBody({
   message,
   isLoading,
-  continuation = false,
+  continuation,
 }: {
   message: Message;
   isLoading: boolean;
-  // True when the previous message was also assistant-side (an AI/tool step), so this row joins
-  // the same Nora block (no repeated avatar/header) — the agent's work reads as one turn.
-  continuation?: boolean;
+  continuation: boolean;
 }) {
   const stream = useStreamContext();
   const meta = stream.getMessagesMetadata(message);
@@ -119,19 +404,10 @@ export function AssistantMessage({
       : undefined;
 
   // push_ui_message UI messages tagged to this AI message (analytics dashboard, or the marketing
-  // brief + storyboard/script/critique cards).
+  // brief + storyboard/script/critique cards). Rendered regardless of whether the message has text.
   const uiForMessage = (stream.values.ui ?? []).filter(
     (ui) => (ui.metadata as { message_id?: string } | undefined)?.message_id === message.id,
   );
-  // The turn's paradigm, from the cards it pushed — drives the ModeChip. Marketing cards →
-  // marketing; the route_map card → routing; otherwise the analytics agent.
-  const mode: TurnMode = uiForMessage.some((ui) => MARKETING_UI.has(ui.name))
-    ? "marketing"
-    : uiForMessage.some((ui) => ui.name === "route_map")
-      ? "routing"
-      : uiForMessage.some((ui) => ui.name === "workspace_actions")
-        ? "workspace"
-        : "analytics";
 
   const [copied, setCopied] = useState(false);
   const copy = () => {
@@ -150,78 +426,68 @@ export function AssistantMessage({
   };
 
   return (
-    <div className="group flex items-start gap-3">
-      {continuation ? <AvatarSpacer /> : <NoraAvatar />}
-      <div className="min-w-0 flex-1 space-y-2">
-        {!continuation && (
-          <div className="flex items-center gap-2">
-            <span className="text-[13px] font-semibold">Nora</span>
-            <ModeChip mode={mode} />
-          </div>
-        )}
+    <div className="group space-y-2">
+      {/* The model's reasoning chain (Anthropic extended thinking) — drawn before the answer/
+          tool steps it produced. Empty for non-reasoning models (e.g. gpt-4o), so it renders
+          nothing by default. */}
+      {reasoning && <ReasoningStep reasoning={reasoning} running={reasoningRunning} />}
 
-        {/* The model's reasoning chain (Anthropic extended thinking) — drawn before the answer/
-            tool steps it produced. Empty for non-reasoning models (e.g. gpt-4o), so it renders
-            nothing by default. */}
-        {reasoning && <ReasoningStep reasoning={reasoning} running={reasoningRunning} />}
+      {text && (
+        <div className="rounded-[5px_13px_13px_13px] border bg-card px-[15px] py-[13px] text-[13.5px] leading-[1.55]">
+          <MarkdownText>{text}</MarkdownText>
+        </div>
+      )}
 
-        {text && (
-          <div className="rounded-[5px_13px_13px_13px] border bg-card px-[15px] py-[13px] text-[13.5px] leading-[1.55]">
-            <MarkdownText>{text}</MarkdownText>
-          </div>
-        )}
+      {toolCalls.length > 0 && (
+        // One AI message's tool calls = one step. Calls in the same message ran in PARALLEL
+        // (ToolNode fires them together); a later message is a SEQUENTIAL step. Thread them.
+        <ToolStepGroup calls={toolCalls} resultFor={resultFor} continuation={continuation} />
+      )}
 
-        {toolCalls.length > 0 && (
-          // One AI message's tool calls = one step. Calls in the same message ran in PARALLEL
-          // (ToolNode fires them together); a later message is a SEQUENTIAL step. Thread them.
-          <ToolStepGroup calls={toolCalls} resultFor={resultFor} continuation={continuation} />
-        )}
+      {uiForMessage.map((ui) => (
+        <LoadExternalComponent
+          key={ui.id}
+          // Cast at the boundary: LoadExternalComponent's prop types are deliberately loose
+          // (Record<string, unknown> state, {}-prop components); our typed stream + dashboard
+          // component are stricter. Runtime behaviour is correct (ui.props → AnalyticsDashboard).
+          stream={stream as ComponentProps<typeof LoadExternalComponent>["stream"]}
+          message={ui}
+          components={
+            UI_COMPONENTS as unknown as ComponentProps<typeof LoadExternalComponent>["components"]
+          }
+        />
+      ))}
 
-        {uiForMessage.map((ui) => (
-          <LoadExternalComponent
-            key={ui.id}
-            // Cast at the boundary: LoadExternalComponent's prop types are deliberately loose
-            // (Record<string, unknown> state, {}-prop components); our typed stream + dashboard
-            // component are stricter. Runtime behaviour is correct (ui.props → AnalyticsDashboard).
-            stream={stream as ComponentProps<typeof LoadExternalComponent>["stream"]}
-            message={ui}
-            components={
-              UI_COMPONENTS as unknown as ComponentProps<typeof LoadExternalComponent>["components"]
-            }
+      {/* Actions sit on the message that carries the final text answer, not the tool steps. */}
+      {text && (
+        <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+          <BranchSwitcher
+            branch={meta?.branch}
+            branchOptions={meta?.branchOptions}
+            onSelect={(b) => stream.setBranch(b)}
+            disabled={isLoading}
           />
-        ))}
-
-        {/* Actions sit on the message that carries the final text answer, not the tool steps. */}
-        {text && (
-          <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-            <BranchSwitcher
-              branch={meta?.branch}
-              branchOptions={meta?.branchOptions}
-              onSelect={(b) => stream.setBranch(b)}
-              disabled={isLoading}
-            />
-            <button
-              type="button"
-              title="Copy"
-              aria-label="Copy message"
-              onClick={copy}
-              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-            >
-              {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-            </button>
-            <button
-              type="button"
-              title="Regenerate"
-              aria-label="Regenerate response"
-              disabled={isLoading}
-              onClick={regenerate}
-              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
-            >
-              <RefreshCw className="size-3.5" />
-            </button>
-          </div>
-        )}
-      </div>
+          <button
+            type="button"
+            title="Copy"
+            aria-label="Copy message"
+            onClick={copy}
+            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+          </button>
+          <button
+            type="button"
+            title="Regenerate"
+            aria-label="Regenerate response"
+            disabled={isLoading}
+            onClick={regenerate}
+            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+          >
+            <RefreshCw className="size-3.5" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

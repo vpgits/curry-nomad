@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useQueryState } from "nuqs";
 import { useSession } from "next-auth/react";
-import { ArrowDown, ArrowUp, Square } from "lucide-react";
+import { ArrowDown, ArrowUp, Sparkles, Square } from "lucide-react";
 import type { Message } from "@langchain/langgraph-sdk";
 
 import { AppShell } from "@/components/app-shell";
@@ -13,12 +13,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { MarketingInterrupt } from "@/lib/types";
 import { AUTH_REQUIRED, WORKSPACE_ENABLED } from "@/lib/config";
+import { cn } from "@/lib/utils";
 import { getWorkspaceAccessToken } from "@/lib/workspace-client";
 import { useStreamContext } from "@/providers/Stream";
 import { SignInGate } from "@/components/auth/sign-in-gate";
 import { WorkspaceConnect } from "@/components/workspace/workspace-connect";
 import { AskNoraModeLane } from "./AskNoraModeLane";
-import { AssistantMessage, NoraAvatar } from "./messages/ai";
+import { AssistantTurn, NoraAvatar } from "./messages/ai";
 import { HumanMessage } from "./messages/human";
 
 const SUGGESTIONS = [
@@ -30,9 +31,53 @@ const SUGGESTIONS = [
     : []),
 ];
 
+// A boolean preference persisted to localStorage, read via useSyncExternalStore so it's SSR-safe and
+// has no setState-in-effect. getServerSnapshot returns `defaultValue`, which React also uses for the
+// first client render, so hydration matches; React then re-reads the real value post-hydration. The
+// snapshot is a primitive boolean (Object.is-stable), so there's no render loop. The setter writes
+// through and dispatches a synthetic `storage` event so the current tab re-reads (the native event
+// only fires in OTHER tabs); listening to real `storage` events keeps tabs in sync too.
+function useLocalStorageBoolean(key: string, defaultValue: boolean) {
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      const handler = (e: StorageEvent) => {
+        if (e.key === null || e.key === key) onChange();
+      };
+      window.addEventListener("storage", handler);
+      return () => window.removeEventListener("storage", handler);
+    },
+    [key],
+  );
+  const getSnapshot = useCallback(() => {
+    try {
+      return window.localStorage.getItem(key) === "true";
+    } catch {
+      return defaultValue;
+    }
+  }, [key, defaultValue]);
+  const value = useSyncExternalStore(subscribe, getSnapshot, () => defaultValue);
+  const set = useCallback(
+    (next: boolean) => {
+      try {
+        window.localStorage.setItem(key, String(next));
+      } catch {
+        /* localStorage unavailable (private mode / SSR) — ignore */
+      }
+      window.dispatchEvent(new StorageEvent("storage", { key }));
+    },
+    [key],
+  );
+  return [value, set] as const;
+}
+
 export function Thread() {
   const stream = useStreamContext();
   const [threadId] = useQueryState("threadId");
+  // "Author UI" output mode — a GLOBAL, persisted preference (not a URL param), so it survives
+  // navigating between threads instead of silently resetting. It's an on-demand per-run rendering
+  // choice: when on, each message you send asks the analytics path to COMPOSE a custom UI surface
+  // (config.configurable.ui_mode="authored") instead of the fixed dashboard, until you turn it off.
+  const [authorUi, setAuthorUi] = useLocalStorageBoolean("nora.authorUi", false);
   const [input, setInput] = useState("");
   const { status } = useSession();
 
@@ -49,10 +94,16 @@ export function Thread() {
     const content = text.trim();
     if (!content) return;
     setInput("");
-    // Workspace capability: when enabled, fetch the operator's current Google access token and pass
-    // it per-run in config.configurable. The backend `workspace` node reads it to act on Gmail/
-    // Calendar; other capabilities ignore it. Null (not connected) → the node prompts to connect.
+    // Per-run config rides in config.configurable. Two independent keys can land here:
+    //   - google_access_token: the Workspace capability's per-run Google token (when enabled +
+    //     connected); the backend `workspace` node reads it, other capabilities ignore it.
+    //   - ui_mode: "authored" when the "Author UI" toggle is on, so the analytics path composes an
+    //     A2UI surface instead of the fixed dashboard.
+    // Merge both under one configurable object so neither clobbers the other.
     const googleToken = WORKSPACE_ENABLED ? await getWorkspaceAccessToken() : null;
+    const configurable: Record<string, unknown> = {};
+    if (googleToken) configurable.google_access_token = googleToken;
+    if (authorUi) configurable.ui_mode = "authored";
     stream.submit(
       { messages: [{ type: "human", content }] },
       {
@@ -60,9 +111,7 @@ export function Thread() {
         // Stream the analytics agent subgraph's messages too — its run_sql steps and the final
         // answer flow in live (the subgraph is a real node in the orchestrator graph).
         streamSubgraphs: true,
-        ...(googleToken
-          ? { config: { configurable: { google_access_token: googleToken } } }
-          : {}),
+        ...(Object.keys(configurable).length > 0 ? { config: { configurable } } : {}),
         optimisticValues: (prev) => ({
           ...prev,
           messages: [
@@ -102,8 +151,28 @@ export function Thread() {
 
       <footer className="shrink-0 border-t bg-background">
         <WorkspaceConnect />
+        <div className="mx-auto flex max-w-3xl items-center justify-end px-[26px] pt-3">
+          {/* Output-mode toggle: an on-demand, persisted preference. When on, each answer comes back
+              as an LLM-authored A2UI surface instead of the fixed dashboard (sets ui_mode="authored"
+              on the run), and it stays on across threads until you turn it off. */}
+          <button
+            type="button"
+            onClick={() => setAuthorUi(!authorUi)}
+            aria-pressed={authorUi}
+            title="Compose a custom UI for your next answer (applies until you turn it off)"
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-semibold transition-colors",
+              authorUi
+                ? "border-brand-edge bg-brand-tint text-brand-text"
+                : "border-border bg-card text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <Sparkles className="size-3.5" />
+            Author UI
+          </button>
+        </div>
         <form
-          className="mx-auto flex max-w-3xl items-center gap-2.5 px-[26px] py-4"
+          className="mx-auto flex max-w-3xl items-center gap-2.5 px-[26px] pt-2.5 pb-4"
           onSubmit={(e) => {
             e.preventDefault();
             void send(input);
@@ -143,6 +212,31 @@ export function Thread() {
   );
 }
 
+// A conversational turn: a human message followed by the assistant-side run it produced (the AI
+// messages — supervisor handoffs + each delegated subagent's work). Tool messages are excluded here
+// (they're paired into their tool-step cards downstream), but remain in stream.messages.
+type Turn = { key: string; human?: Message; ai: Message[] };
+
+// Group the flat message list into turns: a human message starts a turn and collects every AI
+// message until the next human. An assistant-led run with no preceding human (only at the very
+// start) still forms a turn so nothing is dropped.
+function groupTurns(messages: Message[]): Turn[] {
+  const turns: Turn[] = [];
+  let current: Turn | null = null;
+  messages.forEach((m, i) => {
+    if (m.type === "human") {
+      if (current) turns.push(current);
+      current = { key: m.id ?? `turn-${i}`, human: m, ai: [] };
+    } else if (m.type === "ai") {
+      if (!current) current = { key: m.id ?? `turn-${i}`, ai: [] };
+      current.ai.push(m);
+    }
+    // tool messages: skipped here — rendered inside their tool-step card, not as a turn member.
+  });
+  if (current) turns.push(current);
+  return turns;
+}
+
 function MessageList({
   messages,
   isLoading,
@@ -160,6 +254,7 @@ function MessageList({
   briefsHref: string;
   onPick: (text: string) => void;
 }) {
+  const turns = groupTurns(messages);
   const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
@@ -195,30 +290,25 @@ function MessageList({
           <EmptyState onPick={onPick} />
         ) : (
           <div className="flex flex-col gap-[18px]">
-            {messages.map((message, idx) => {
-              const prev = messages[idx - 1];
-              // Group consecutive assistant-side rows (the agent's tool steps + final answer) under
-              // one Nora block: a row "continues" the turn when the previous message was AI or tool.
-              const continuation = !!prev && (prev.type === "ai" || prev.type === "tool");
-              if (message.type === "human") {
-                return (
-                  <HumanMessage key={message.id ?? idx} message={message} isLoading={isLoading} />
-                );
-              }
-              if (message.type === "ai") {
-                return (
-                  <AssistantMessage
-                    key={message.id ?? idx}
-                    message={message}
+            {/* Group the flat stream into turns (a human message + the assistant-side run it
+                produced), then render the human bubble and ONE AssistantTurn per turn. AssistantTurn
+                segments its messages into supervisor→subagent delegation boundaries + lanes. Tool
+                messages are dropped from the turn here but stay in stream.messages, so each is still
+                paired into its tool-step card via the resultFor lookup inside the lane. */}
+            {turns.map((turn, idx) => (
+              <Fragment key={turn.key}>
+                {turn.human && (
+                  <HumanMessage message={turn.human} isLoading={isLoading} />
+                )}
+                {turn.ai.length > 0 && (
+                  <AssistantTurn
+                    messages={turn.ai}
                     isLoading={isLoading}
-                    continuation={continuation}
+                    isActive={isLoading && idx === turns.length - 1}
                   />
-                );
-              }
-              // Tool result messages aren't rendered loose — each is paired into its tool call's
-              // collapsible card (ToolStep) inside the AssistantMessage above.
-              return null;
-            })}
+                )}
+              </Fragment>
+            ))}
 
             {/* Two HITL gates. The concept-pick gate is an inline interactive selection (resumes
                 right here); the script-review gate hands off to the dedicated /briefs surface. */}
