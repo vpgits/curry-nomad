@@ -25,8 +25,12 @@ import { orderStatusLabel, orderStatusTone } from "./order-status";
 const selectClass =
   "h-9 rounded-[8px] border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30";
 
-type Line = { sku: string; quantity: string };
+type Line = { id: string; sku: string; quantity: string };
 type Filter = "all" | "pending" | "dispatched";
+
+// Each line carries a stable id so React keys survive mid-list removal (filtering by index would
+// reassign state across the wrong rows).
+const newLine = (): Line => ({ id: crypto.randomUUID(), sku: "", quantity: "1" });
 
 // "Packed" is omitted — the backend only has reserved → dispatched, so a Packed filter would never
 // match. Filtering "pending" maps to the backend's "reserved" state.
@@ -49,7 +53,7 @@ export function OrdersSection() {
   const [busy, setBusy] = useState(false);
 
   const [customerId, setCustomerId] = useState("1");
-  const [lines, setLines] = useState<Line[]>([{ sku: "", quantity: "1" }]);
+  const [lines, setLines] = useState<Line[]>(() => [newLine()]);
   const [withDelivery, setWithDelivery] = useState(false);
   const [city, setCity] = useState<string>(LOCAL_CITIES[0]);
   const [address, setAddress] = useState("");
@@ -78,7 +82,7 @@ export function OrdersSection() {
 
   const resetForm = () => {
     setCustomerId("1");
-    setLines([{ sku: "", quantity: "1" }]);
+    setLines([newLine()]);
     setWithDelivery(false);
     setCity(LOCAL_CITIES[0]);
     setAddress("");
@@ -133,6 +137,7 @@ export function OrdersSection() {
           {FILTERS.map((f) => (
             <button
               key={f.key}
+              type="button"
               onClick={() => setFilter(f.key)}
               className={cn(
                 "rounded-full px-3.5 py-1.5 text-[12.5px] font-medium transition-colors",
@@ -166,6 +171,7 @@ export function OrdersSection() {
                 {visible.map((o) => (
                   <button
                     key={o.order_id}
+                    type="button"
                     onClick={() => setSelectedId(o.order_id)}
                     className={cn(
                       ROW,
@@ -240,7 +246,7 @@ export function OrdersSection() {
             <div className="flex flex-col gap-2">
               <span className="text-sm font-medium">Line items</span>
               {lines.map((line, i) => (
-                <div key={i} className="flex items-center gap-2">
+                <div key={line.id} className="flex items-center gap-2">
                   <select
                     className={`${selectClass} flex-1`}
                     value={line.sku}
@@ -281,7 +287,7 @@ export function OrdersSection() {
                 size="xs"
                 variant="outline"
                 className="w-fit"
-                onClick={() => setLines((ls) => [...ls, { sku: "", quantity: "1" }])}
+                onClick={() => setLines((ls) => [...ls, newLine()])}
               >
                 <Plus /> Add line
               </Button>

@@ -81,14 +81,13 @@ export const LOCAL_CITIES = [
   "Jaffna",
 ] as const;
 
-export function formatLkr(amount: number): string {
-  return new Intl.NumberFormat("en-LK", { maximumFractionDigits: 0 }).format(amount) + " LKR";
-}
+// Built once at module scope — `new Intl.NumberFormat` reloads locale-data tables on every call, so
+// rebuilding it per format() (and per list item) is wasted work.
+const LKR_NUMBER_FORMAT = new Intl.NumberFormat("en-LK", { maximumFractionDigits: 0 });
 
-// "₨ 4,250" — the redesign's rupee format (₨ prefix, no decimals). formatLkr (suffix " LKR") is
-// kept for the operations console's toasts.
+// "₨ 4,250" — the redesign's rupee format (₨ prefix, no decimals).
 export function formatRupees(amount: number): string {
-  return "₨ " + new Intl.NumberFormat("en-LK", { maximumFractionDigits: 0 }).format(amount);
+  return "₨ " + LKR_NUMBER_FORMAT.format(amount);
 }
 
 // "₨ 1.28M" / "₨ 96k" — compact form for KPI hero numbers.

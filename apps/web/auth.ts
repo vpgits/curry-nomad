@@ -2,20 +2,16 @@ import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 import { SignJWT } from "jose";
 
+import { AUTH_SECRET } from "@/lib/auth-secret";
+
 // Plane 1 — app login (identity only). The Google provider requests ONLY openid/email/profile here;
 // the heavy Workspace scopes (Gmail/Calendar) are a SEPARATE, incremental grant (see
 // app/api/google/*). NextAuth owns the OAuth dance, the session cookie, and CSRF.
 //
-// The signing secret doubles as the key the backend (auth.py) verifies the minted Aegra token with,
-// so AUTH_SECRET here MUST equal the backend's NEXTAUTH_SECRET. A dev fallback keeps the default
-// (auth-off) stack from crashing — it's harmless because AUTH_TYPE=noop means the backend never
-// verifies the token; the workspace demo sets a real, matching secret.
-const AUTH_SECRET =
-  process.env.AUTH_SECRET ??
-  process.env.NEXTAUTH_SECRET ??
-  "nora-dev-insecure-secret-please-override-0123456789";
+// The signing secret (lib/auth-secret) doubles as the key the backend (auth.py) verifies the minted
+// Aegra token with, so AUTH_SECRET here MUST equal the backend's NEXTAUTH_SECRET in production.
 
-export const { handlers, auth, signIn, signOut } = NextAuth({
+export const { handlers, auth } = NextAuth({
   trustHost: true,
   secret: AUTH_SECRET,
   providers: [

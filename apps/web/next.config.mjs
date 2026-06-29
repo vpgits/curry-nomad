@@ -5,6 +5,10 @@ const nextConfig = {
   turbopack: {
     root: import.meta.dirname,
   },
+  // The signed-in operator's Google profile photo (next/image in the sidebar account row).
+  images: {
+    remotePatterns: [{ protocol: "https", hostname: "*.googleusercontent.com" }],
+  },
 };
 
 export default nextConfig;

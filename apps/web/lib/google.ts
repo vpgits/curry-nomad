@@ -7,6 +7,8 @@
 import { createHash } from "crypto";
 import { EncryptJWT, jwtDecrypt } from "jose";
 
+import { AUTH_SECRET } from "@/lib/auth-secret";
+
 // The heavy scopes the incremental grant requests. MUST be a subset of what's configured on the
 // Google OAuth consent screen (Data Access), or the grant flow fails / shows un-consented scopes.
 export const GOOGLE_WORKSPACE_SCOPES = [
@@ -21,6 +23,11 @@ export const GOOGLE_WORKSPACE_SCOPES = [
 
 export const GW_COOKIE = "gw_tokens";
 
+// One-time CSRF token for the incremental grant: connect plants it (cookie + ?state=), callback
+// requires the echoed value to match and then consumes it. Without it, a forged GET to the callback
+// could bind an attacker's Google tokens into the victim's session.
+export const GW_STATE_COOKIE = "gw_oauth_state";
+
 export interface GoogleTokens {
   access_token: string;
   refresh_token?: string;
@@ -28,12 +35,9 @@ export interface GoogleTokens {
 }
 
 function cookieKey(): Uint8Array {
-  const secret =
-    process.env.AUTH_SECRET ??
-    process.env.NEXTAUTH_SECRET ??
-    "nora-dev-insecure-secret-please-override-0123456789";
-  // A256GCM needs a 32-byte key; SHA-256 of the secret gives exactly that, deterministically.
-  return new Uint8Array(createHash("sha256").update(secret).digest());
+  // A256GCM needs a 32-byte key; SHA-256 of the shared signing secret gives exactly that,
+  // deterministically. (The secret's source/fallback policy lives in lib/auth-secret.)
+  return new Uint8Array(createHash("sha256").update(AUTH_SECRET).digest());
 }
 
 export function redirectUri(): string {
@@ -60,6 +64,33 @@ export async function decryptTokens(value: string): Promise<GoogleTokens | null>
   } catch {
     return null;
   }
+}
+
+// Exchange a fresh authorization code for tokens (the first leg of the incremental grant). Mirrors
+// refreshAccessToken below — both POST to Google's token endpoint — so the two live together here
+// rather than inline in the route handler. Returns null on any failure; the caller redirects to an
+// error page.
+export async function exchangeCodeForTokens(code: string): Promise<GoogleTokens | null> {
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      code,
+      client_id: process.env.GOOGLE_CLIENT_ID ?? "",
+      client_secret: process.env.GOOGLE_CLIENT_SECRET ?? "",
+      redirect_uri: redirectUri(),
+      grant_type: "authorization_code",
+    }),
+    cache: "no-store",
+  });
+  if (!res.ok) return null;
+  const tok = await res.json();
+  if (!tok.access_token) return null;
+  return {
+    access_token: tok.access_token,
+    refresh_token: tok.refresh_token,
+    expires_at: Date.now() + (tok.expires_in ?? 3600) * 1000,
+  };
 }
 
 export async function refreshAccessToken(refreshToken: string): Promise<GoogleTokens | null> {

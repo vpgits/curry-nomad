@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, use, type ReactNode } from "react";
 import { useStream } from "@langchain/langgraph-sdk/react";
 import {
   uiMessageReducer,
@@ -74,7 +74,7 @@ export function StreamProvider({ children }: { children: ReactNode }) {
 }
 
 export function useStreamContext(): StreamContextType {
-  const ctx = useContext(StreamContext);
+  const ctx = use(StreamContext);
   if (ctx === undefined) {
     throw new Error("useStreamContext must be used within a StreamProvider");
   }

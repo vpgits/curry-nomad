@@ -43,8 +43,8 @@ export function VideoBriefCard({ brief }: { brief: VideoBrief }) {
         <section className="space-y-2">
           <SectionTitle icon={<Film className="size-3.5" />}>Script</SectionTitle>
           <div className="space-y-2">
-            {brief.script_beats.map((b, i) => (
-              <div key={i} className="border-l-2 border-border pl-3">
+            {brief.script_beats.map((b) => (
+              <div key={b.t_start_s} className="border-l-2 border-border pl-3">
                 <div className="font-mono text-xs text-muted-foreground">
                   {b.t_start_s}s – {b.t_end_s}s
                 </div>
@@ -59,8 +59,8 @@ export function VideoBriefCard({ brief }: { brief: VideoBrief }) {
         <section className="space-y-2">
           <SectionTitle icon={<Quote className="size-3.5" />}>Grounded in</SectionTitle>
           <div className="flex flex-wrap gap-1.5">
-            {brief.product_facts_used.map((f, i) => (
-              <Badge key={i} variant="secondary" className="font-normal">
+            {brief.product_facts_used.map((f) => (
+              <Badge key={f} variant="secondary" className="font-normal">
                 {f}
               </Badge>
             ))}
@@ -70,8 +70,8 @@ export function VideoBriefCard({ brief }: { brief: VideoBrief }) {
         <section className="space-y-2">
           <SectionTitle icon={<Hash className="size-3.5" />}>Hashtags</SectionTitle>
           <div className="flex flex-wrap gap-1.5">
-            {brief.hashtags.map((h, i) => (
-              <Badge key={i} variant="outline">
+            {brief.hashtags.map((h) => (
+              <Badge key={h} variant="outline">
                 {h}
               </Badge>
             ))}

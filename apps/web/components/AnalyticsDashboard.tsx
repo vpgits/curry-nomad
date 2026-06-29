@@ -1,21 +1,8 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { BarChart3 } from "lucide-react";
 import type { Message } from "@langchain/langgraph-sdk";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 
 import {
   Card,
@@ -23,15 +10,24 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import type { AnalyticsDashboardData, DashboardChart } from "@/lib/types";
+import type { AnalyticsDashboardData, DashboardStat } from "@/lib/types";
 import { useStreamContext } from "@/providers/Stream";
 
-// Warm turmeric/earth palette, in step with the Operator redesign.
-const CHART_COLORS = ["#d97706", "#0f766e", "#b45309", "#7c3aed", "#0369a1", "#be123c"];
+const EMPTY_STATS: DashboardStat[] = [];
+
+// The recharts chart is split into its own client-only chunk and next/dynamic-imported with
+// ssr:false (recharts is heavy and only renders below the fold, after a chat turn) — mirrors the
+// RouteMap → RouteMapLeaflet split.
+const DashboardChartView = dynamic(() => import("./AnalyticsDashboardChart"), { ssr: false });
 
 // The generative-UI dashboard the analytics path composes (schemas.py:AnalyticsDashboard). The
 // useStream UI mounts it via LoadExternalComponent. Props are the dashboard dict verbatim.
-export function AnalyticsDashboard({ title, stats = [], table, chart }: AnalyticsDashboardData) {
+export function AnalyticsDashboard({
+  title,
+  stats = EMPTY_STATS,
+  table,
+  chart,
+}: AnalyticsDashboardData) {
   const stream = useStreamContext();
   const hasChart =
     !!chart && chart.kind !== "none" && Array.isArray(chart.series) && chart.series.length > 0;
@@ -70,8 +66,8 @@ export function AnalyticsDashboard({ title, stats = [], table, chart }: Analytic
       <CardContent className="space-y-4">
         {stats.length > 0 && (
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            {stats.map((stat, i) => (
-              <div key={i} className="rounded-lg border bg-muted/30 p-3">
+            {stats.map((stat) => (
+              <div key={stat.label} className="rounded-lg border bg-muted/30 p-3">
                 <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                   {stat.label}
                 </div>
@@ -91,8 +87,8 @@ export function AnalyticsDashboard({ title, stats = [], table, chart }: Analytic
             <table className="w-full border-collapse text-sm">
               <thead className="bg-muted/50">
                 <tr>
-                  {table.columns.map((col, i) => (
-                    <th key={i} className="border-b px-3 py-2 text-left font-medium">
+                  {table.columns.map((col) => (
+                    <th key={col} className="border-b px-3 py-2 text-left font-medium">
                       {col}
                     </th>
                   ))}
@@ -119,69 +115,5 @@ export function AnalyticsDashboard({ title, stats = [], table, chart }: Analytic
         )}
       </CardContent>
     </Card>
-  );
-}
-
-// The chart the builder model chose (bar/line/pie). A thin Recharts wrapper — the model decides the
-// kind, this just draws it.
-function DashboardChartView({ chart }: { chart: DashboardChart }) {
-  return (
-    <div className="rounded-lg border bg-muted/20 p-3">
-      <div className="h-[210px] w-full">
-        <ResponsiveContainer width="100%" height="100%">
-          {chart.kind === "pie" ? (
-            <PieChart>
-              <Tooltip />
-              <Pie
-                data={chart.series}
-                dataKey="value"
-                nameKey="label"
-                cx="50%"
-                cy="50%"
-                innerRadius={45}
-                outerRadius={85}
-                paddingAngle={2}
-              >
-                {chart.series.map((_, i) => (
-                  <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                ))}
-              </Pie>
-            </PieChart>
-          ) : chart.kind === "line" ? (
-            <LineChart data={chart.series} margin={{ top: 8, right: 12, bottom: 4, left: -8 }}>
-              <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-              <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip />
-              <Line
-                type="monotone"
-                dataKey="value"
-                stroke={CHART_COLORS[0]}
-                strokeWidth={2}
-                dot={{ r: 3 }}
-              />
-            </LineChart>
-          ) : (
-            <BarChart data={chart.series} margin={{ top: 8, right: 12, bottom: 4, left: -8 }}>
-              <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-              <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip />
-              <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                {chart.series.map((_, i) => (
-                  <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                ))}
-              </Bar>
-            </BarChart>
-          )}
-        </ResponsiveContainer>
-      </div>
-      {(chart.x_label || chart.y_label) && (
-        <div className="mt-1 flex justify-between px-1 text-[10px] text-muted-foreground">
-          <span>{chart.x_label}</span>
-          <span>{chart.y_label}</span>
-        </div>
-      )}
-    </div>
   );
 }

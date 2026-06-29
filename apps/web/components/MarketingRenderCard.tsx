@@ -12,6 +12,9 @@ import type { RenderResult, RenderShot } from "@/lib/types";
 // the tile polls /api/render/video/{id} and swaps the still for a <video> once it completes.
 const TERMINAL = new Set(["completed", "failed", "cancelled", "expired"]);
 const POLL_MS = 6000;
+// Stable empty default so an absent `shots` prop doesn't allocate a fresh [] each render (preserves
+// referential equality for memoized children / dependency arrays).
+const EMPTY_SHOTS: RenderShot[] = [];
 
 function mediaUrl(path?: string | null): string | undefined {
   return path ? `${OPS_API_URL}${path}` : undefined;
@@ -21,7 +24,7 @@ export function MarketingRenderCard({
   status,
   mode,
   hero_image_url,
-  shots = [],
+  shots = EMPTY_SHOTS,
   image_model,
   video_model,
   detail,
@@ -44,7 +47,7 @@ export function MarketingRenderCard({
           // eslint-disable-next-line @next/next/no-img-element -- dynamic ops-api/proxy media; next/image's optimizer doesn't fit arbitrary runtime origins
           <img
             src={mediaUrl(hero_image_url)}
-            alt="Generated hero image"
+            alt="Generated ad hero frame"
             className="aspect-[9/16] max-h-72 w-auto rounded-lg border object-cover"
           />
         ) : null}
@@ -129,6 +132,7 @@ function ShotTile({ shot }: { shot: RenderShot }) {
           playsInline
           poster={still}
           src={`/api/render/video/${jobId}/content`}
+          aria-label={`Generated video — shot ${shot.index + 1}`}
           className="aspect-[9/16] w-full rounded-md border object-cover"
         />
       ) : still ? (

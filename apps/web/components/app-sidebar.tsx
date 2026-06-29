@@ -2,6 +2,7 @@
 
 import { useEffect, type ComponentProps, type ComponentType } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { useQueryState } from "nuqs";
 import { signIn, signOut, useSession } from "next-auth/react";
@@ -111,6 +112,18 @@ function NavRow({ item, active }: { item: NavItem; active: boolean }) {
   );
 }
 
+// Sign out of both planes: best-effort clear the Workspace grant (Plane 2), then the standard
+// NextAuth sign-out. Lives at module scope because it closes over nothing render-specific (just the
+// imported signOut + global fetch), so it isn't reallocated on every render.
+async function handleSignOut() {
+  try {
+    await fetch("/api/google/disconnect", { method: "POST" });
+  } catch {
+    /* ignore — sign out regardless */
+  }
+  void signOut({ callbackUrl: "/" });
+}
+
 // The sidebar footer account row. With auth on, it shows the signed-in Google operator + a standard
 // NextAuth signOut() (which also drops the Workspace grant so a re-login re-runs it). With auth off
 // (noop mode) it keeps the original presentational placeholder.
@@ -142,21 +155,17 @@ function SidebarAccount() {
   }
 
   const user = session.user;
-  const handleSignOut = async () => {
-    // Best-effort: clear the Workspace grant (Plane 2) before the standard NextAuth sign-out.
-    try {
-      await fetch("/api/google/disconnect", { method: "POST" });
-    } catch {
-      /* ignore — sign out regardless */
-    }
-    void signOut({ callbackUrl: "/" });
-  };
 
   return (
     <div className="flex items-center gap-2 px-1.5 py-1 group-data-[collapsible=icon]:px-0">
       {user?.image ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={user.image} alt="" className="size-[26px] shrink-0 rounded-full" />
+        <Image
+          src={user.image}
+          alt=""
+          width={26}
+          height={26}
+          className="size-[26px] shrink-0 rounded-full"
+        />
       ) : (
         <span className="size-[26px] shrink-0 rounded-full bg-muted-foreground/40" />
       )}
@@ -207,7 +216,7 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
     setOpenMobile(false);
   };
 
-  const ordered = [...threads].sort(byRecency);
+  const ordered = threads.toSorted(byRecency);
 
   return (
     <Sidebar collapsible="icon" {...props}>

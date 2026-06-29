@@ -15,14 +15,15 @@ export function WorkspaceConnect() {
 
   useEffect(() => {
     if (!WORKSPACE_ENABLED || status !== "authenticated") return;
-    let active = true;
-    fetch("/api/google/status")
+    // One-shot status check; abort it on unmount so a late response can't setState on a gone component.
+    const controller = new AbortController();
+    fetch("/api/google/status", { signal: controller.signal })
       .then((r) => r.json())
-      .then((d) => active && setConnected(Boolean(d.connected)))
-      .catch(() => active && setConnected(false));
-    return () => {
-      active = false;
-    };
+      .then((d) => setConnected(Boolean(d.connected)))
+      .catch(() => {
+        if (!controller.signal.aborted) setConnected(false);
+      });
+    return () => controller.abort();
   }, [status]);
 
   if (!WORKSPACE_ENABLED) return null;

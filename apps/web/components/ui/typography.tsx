@@ -2,11 +2,6 @@ import type { ComponentProps } from "react";
 
 import { cn } from "@/lib/utils";
 
-// Mono — every number, SKU, timestamp, currency reads in IBM Plex Mono so columns align.
-export function Mono({ className, ...props }: ComponentProps<"span">) {
-  return <span className={cn("font-mono tabular-nums", className)} {...props} />;
-}
-
 // Eyebrow — the uppercase mono label that captions cards, KPIs and table headers.
 export function Eyebrow({ className, ...props }: ComponentProps<"div">) {
   return (

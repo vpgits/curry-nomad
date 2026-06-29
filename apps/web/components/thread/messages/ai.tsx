@@ -363,7 +363,7 @@ function WorkingDots() {
       {[0, 1, 2].map((i) => (
         <span
           key={i}
-          className="size-1.5 animate-bounce rounded-full bg-muted-foreground/50"
+          className="size-1.5 animate-pulse rounded-full bg-muted-foreground/50"
           style={{ animationDelay: `${i * 0.15}s` }}
         />
       ))}
@@ -617,7 +617,7 @@ function ToolStep({ call, result }: { call: ToolCall; result?: Message }) {
             {[0, 1, 2].map((i) => (
               <span
                 key={i}
-                className="size-1 animate-bounce rounded-full bg-current"
+                className="size-1 animate-pulse rounded-full bg-current"
                 style={{ animationDelay: `${i * 0.15}s` }}
               />
             ))}
@@ -694,7 +694,7 @@ function parseSqlResult(text: string): ParsedSql {
   const dataLines = footer ? lines.slice(0, -1) : lines;
   const [header, ...rest] = dataLines;
   const columns = header ? header.split(" | ") : [];
-  const rows = rest.filter((r) => r.length > 0).map((r) => r.split(" | "));
+  const rows = rest.flatMap((r) => (r.length > 0 ? [r.split(" | ")] : []));
   return { columns, rows, rowCount };
 }
 
@@ -714,8 +714,8 @@ function SqlResultView({ parsed }: { parsed: ParsedSql }) {
       <table className="w-full border-collapse text-[11px]">
         <thead className="bg-muted/50">
           <tr>
-            {parsed.columns.map((col, i) => (
-              <th key={i} className="border-b px-2 py-1 text-left font-medium whitespace-nowrap">
+            {parsed.columns.map((col) => (
+              <th key={col} className="border-b px-2 py-1 text-left font-medium whitespace-nowrap">
                 {col}
               </th>
             ))}

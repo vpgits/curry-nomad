@@ -10,13 +10,17 @@ import {
 } from "@/components/ui/card";
 import type { Critique } from "@/lib/types";
 
+// Shared empty default so re-renders reuse one reference (a fresh inline [] would break the
+// referential equality memoized children / dependency arrays rely on).
+const EMPTY_STRINGS: string[] = [];
+
 // The evaluator's verdict from the evaluator-optimizer loop (schemas.py:Critique). Surfacing it
 // makes the critique → revise loop visible — it's not in the brief card. Pushed via
 // push_ui_message("marketing_critique", critique).
 export function CritiqueCard({
   passed = false,
-  issues = [],
-  suggestions = [],
+  issues = EMPTY_STRINGS,
+  suggestions = EMPTY_STRINGS,
 }: Critique) {
   return (
     <Card className="gap-4">
@@ -69,8 +73,8 @@ function Section({
         {title}
       </div>
       <ul className="space-y-1">
-        {items.map((it, i) => (
-          <li key={i} className="flex gap-2 text-sm leading-relaxed">
+        {items.map((it) => (
+          <li key={it} className="flex gap-2 text-sm leading-relaxed">
             <span className="text-muted-foreground">·</span>
             {it}
           </li>

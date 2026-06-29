@@ -12,10 +12,13 @@ import type { ScriptBeat } from "@/lib/types";
 
 const SEGMENT_COLORS = ["#d97706", "#0f766e", "#b45309", "#7c3aed", "#0369a1", "#be123c"];
 
+// Stable empty default so re-renders reuse one reference (an inline [] allocates fresh each time).
+const EMPTY_BEATS: ScriptBeat[] = [];
+
 // The approved script as a proportional time axis (beats sized by their duration) plus the
 // voiceover per beat — a more legible view of the same beats the brief lists. Pushed via
 // push_ui_message("marketing_script_timeline", { script_beats }).
-export function ScriptTimeline({ script_beats = [] }: { script_beats: ScriptBeat[] }) {
+export function ScriptTimeline({ script_beats = EMPTY_BEATS }: { script_beats: ScriptBeat[] }) {
   if (script_beats.length === 0) return null;
   const total = Math.max(...script_beats.map((b) => b.t_end_s), 1);
 
@@ -32,7 +35,7 @@ export function ScriptTimeline({ script_beats = [] }: { script_beats: ScriptBeat
         <div className="flex h-2.5 w-full overflow-hidden rounded-full">
           {script_beats.map((b, i) => (
             <div
-              key={i}
+              key={b.t_start_s}
               title={`${b.t_start_s}s – ${b.t_end_s}s`}
               style={{
                 width: `${((b.t_end_s - b.t_start_s) / total) * 100}%`,
@@ -44,7 +47,7 @@ export function ScriptTimeline({ script_beats = [] }: { script_beats: ScriptBeat
 
         <ol className="space-y-2.5">
           {script_beats.map((b, i) => (
-            <li key={i} className="flex gap-3">
+            <li key={b.t_start_s} className="flex gap-3">
               <span
                 className="mt-1 size-2.5 shrink-0 rounded-full"
                 style={{ backgroundColor: SEGMENT_COLORS[i % SEGMENT_COLORS.length] }}

@@ -274,9 +274,11 @@ function MessageList({
     setShowScrollButton(false);
   };
 
-  // Follow new content (tokens + new messages) only when the user is already at the bottom.
+  // Follow new content (tokens + new messages) only when the user is already at the bottom. This
+  // path only scrolls the DOM — it sets no state (we're already at the bottom, so the scroll button
+  // stays hidden via onScroll), which keeps the prop-driven effect free of state adjustments.
   useEffect(() => {
-    if (atBottomRef.current) scrollToBottom("smooth");
+    if (atBottomRef.current) endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, interrupt, isLoading]);
 
   return (
@@ -412,7 +414,7 @@ function ThinkingIndicator() {
         {[0, 1, 2].map((i) => (
           <span
             key={i}
-            className="size-1.5 animate-bounce rounded-full bg-muted-foreground/60"
+            className="size-1.5 animate-pulse rounded-full bg-muted-foreground/60"
             style={{ animationDelay: `${i * 0.15}s` }}
           />
         ))}

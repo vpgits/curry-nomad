@@ -10,12 +10,17 @@ import {
 } from "@/components/ui/card";
 import type { Shot, ShotPrompt } from "@/lib/types";
 
+// Stable empty defaults so re-renders reuse one reference (inline [] would allocate fresh each
+// time, breaking referential equality for memoized children / dependency arrays).
+const EMPTY_SHOTS: Shot[] = [];
+const EMPTY_SHOT_PROMPTS: ShotPrompt[] = [];
+
 // The storyboard the marketing workflow produced, as a horizontal filmstrip of shot cards. Each
 // shot is paired (by index) with its text-to-video prompt — info the brief card only summarises as
 // a count. Pushed via push_ui_message("marketing_storyboard", { shots, shot_prompts }).
 export function StoryboardFilmstrip({
-  shots = [],
-  shot_prompts = [],
+  shots = EMPTY_SHOTS,
+  shot_prompts = EMPTY_SHOT_PROMPTS,
 }: {
   shots: Shot[];
   shot_prompts: ShotPrompt[];

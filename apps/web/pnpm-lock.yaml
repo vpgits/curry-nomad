@@ -38,9 +38,6 @@ importers:
       nuqs:
         specifier: ^2.4.3
         version: 2.8.9(next@16.2.9(@babel/core@7.29.7)(@opentelemetry/api@1.9.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
-      openai:
-        specifier: ^6.44.0
-        version: 6.44.0(ws@8.21.0)(zod@3.25.76)
       postcss:
         specifier: ^8.5.15
         version: 8.5.15
@@ -8067,6 +8064,7 @@ snapshots:
     optionalDependencies:
       ws: 8.21.0
       zod: 3.25.76
+    optional: true
 
   optionator@0.9.4:
     dependencies:

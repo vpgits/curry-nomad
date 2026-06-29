@@ -43,7 +43,7 @@ export function ConceptPicker({ interrupt }: { interrupt: ConceptPickInterrupt }
         <p className="text-[13.5px] text-muted-foreground">{interrupt.question}</p>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {interrupt.concepts.map((c, i) => (
-            <Card key={i} className="flex flex-col gap-3">
+            <Card key={c.angle} className="flex flex-col gap-3">
               <CardHeader>
                 <CardTitle className="flex items-start gap-2 text-sm leading-snug">
                   <Lightbulb className="mt-0.5 size-4 shrink-0 text-brand" />

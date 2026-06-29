@@ -2,8 +2,9 @@
 
 import {
   createContext,
+  use,
   useCallback,
-  useContext,
+  useMemo,
   useState,
   type Dispatch,
   type ReactNode,
@@ -43,15 +44,20 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Memoize the context value so consumers don't re-render on every parent render from a fresh
+  // object identity (getThreads/setThreads are already stable; threads/threadsLoading are state).
+  const value = useMemo(
+    () => ({ threads, setThreads, getThreads, threadsLoading }),
+    [threads, setThreads, getThreads, threadsLoading],
+  );
+
   return (
-    <ThreadContext.Provider value={{ threads, setThreads, getThreads, threadsLoading }}>
-      {children}
-    </ThreadContext.Provider>
+    <ThreadContext.Provider value={value}>{children}</ThreadContext.Provider>
   );
 }
 
 export function useThreads(): ThreadContextType {
-  const ctx = useContext(ThreadContext);
+  const ctx = use(ThreadContext);
   if (ctx === undefined) {
     throw new Error("useThreads must be used within a ThreadProvider");
   }

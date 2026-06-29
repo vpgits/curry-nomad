@@ -92,7 +92,7 @@ function Review({ interrupt }: { interrupt: ReviewInterrupt }) {
           <div className="flex flex-col gap-3">
             {beats.map((beat, i) => (
               <div
-                key={i}
+                key={beat.t_start_s}
                 className={cn(
                   "pl-3.5",
                   editing
