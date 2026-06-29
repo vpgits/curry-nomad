@@ -18,10 +18,11 @@ import sys
 from langchain_core.messages import HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool, ToolException, tool
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
 
 from nora.config import Settings
 from nora.orchestrator import build_orchestrator
-from nora.workspace.graph import build_workspace_agent
+from nora.workspace.graph import WORKSPACE_APPROVAL_KIND, build_workspace_agent
 from tests.fakes import ScriptedChatModel, ai_final, ai_tool_call
 
 
@@ -119,7 +120,9 @@ def test_workspace_runs_the_tool_loop_with_the_operator_token():
         ]
     )
     provider = RecordingToolsProvider()
-    agent = build_workspace_agent(model=model, tools_provider=provider)
+    # hitl="off": these predate the approval gate and exercise the ungated loop mechanics
+    # (token flow, async tools, ToolException self-correction) — the gate is covered separately below.
+    agent = build_workspace_agent(model=model, tools_provider=provider, hitl="off")
     orch = _workspace_orch(agent)
 
     result = _run(orch,
@@ -150,7 +153,9 @@ def test_workspace_loop_drives_async_only_mcp_tools():
         ]
     )
     provider = AsyncOnlyToolsProvider()
-    agent = build_workspace_agent(model=model, tools_provider=provider)
+    # hitl="off": these predate the approval gate and exercise the ungated loop mechanics
+    # (token flow, async tools, ToolException self-correction) — the gate is covered separately below.
+    agent = build_workspace_agent(model=model, tools_provider=provider, hitl="off")
     orch = _workspace_orch(agent)
 
     result = _run(orch,
@@ -185,7 +190,9 @@ def test_workspace_tool_failure_becomes_a_self_correction_message():
             ai_final("I couldn't send it — the address looked wrong; can you confirm it?"),
         ]
     )
-    agent = build_workspace_agent(model=model, tools_provider=provider)
+    # hitl="off": these predate the approval gate and exercise the ungated loop mechanics
+    # (token flow, async tools, ToolException self-correction) — the gate is covered separately below.
+    agent = build_workspace_agent(model=model, tools_provider=provider, hitl="off")
     orch = _workspace_orch(agent)
 
     result = _run(orch,
@@ -198,6 +205,164 @@ def test_workspace_tool_failure_becomes_a_self_correction_message():
     tool_msgs = [m for m in result["messages"] if isinstance(m, ToolMessage)]
     assert any("Re-read the available tools" in (m.content or "") for m in tool_msgs)
     assert "couldn't send it" in result["messages"][-1].content
+
+
+# --- human-in-the-loop on write actions (path B: the hand-written loop's interrupt() gate) ---------
+
+
+def _interrupt_payload(state) -> dict | None:
+    """The pending interrupt's value, if the run paused (a checkpointer-backed graph returns the
+    interrupt under `__interrupt__` in the result state)."""
+    pending = state.get("__interrupt__")
+    if not pending:
+        return None
+    first = pending[0]
+    return getattr(first, "value", first)
+
+
+def test_workspace_primitive_hitl_pauses_on_a_write_then_runs_it_on_approve():
+    """The load-bearing test: an interrupt RAISED deep in the per-run-recompiled workspace subgraph
+    must bubble up to pause the orchestrator, and a `Command(resume=...)` on the same thread must
+    RESUME that subgraph (not restart it) so the approved write finally runs.
+
+    The scripted model discriminates a correct resume from a broken restart: a correct resume calls
+    `llm` once (propose the write → pause at the gate) then once more after resume (the final answer)
+    = 2 scripted messages, with the tool running in between. A broken restart re-enters `llm` from the
+    top on resume, pops the *final* message first, ends without ever running the tool → `sent` stays
+    empty and this fails loudly."""
+    model = ScriptedChatModel(
+        [
+            ai_tool_call(
+                "send_email",
+                {"to": "priya@example.com", "body": "The cloves shipment is delayed two days."},
+                "call-1",
+            ),
+            ai_final("Sent the email to Priya about the delayed cloves shipment."),
+        ]
+    )
+    provider = RecordingToolsProvider()
+    # `send_email` matches the write-tool predicate (starts with "send") → it's gated.
+    agent = build_workspace_agent(model=model, tools_provider=provider, hitl="primitive")
+    orch = _workspace_orch(agent)
+    config = {"configurable": {"thread_id": "w-hitl", "google_access_token": "tok-123"}}
+
+    # Phase 1 — runs until the gate's interrupt. The write must NOT have executed yet.
+    paused = _run(orch, {"messages": [HumanMessage("email priya the cloves are delayed")]}, config)
+    payload = _interrupt_payload(paused)
+    assert payload is not None, "the write should have paused the run"
+    assert payload["kind"] == WORKSPACE_APPROVAL_KIND
+    assert [a["name"] for a in payload["action_requests"]] == ["send_email"]
+    assert provider.sent == []  # gated: nothing sent before approval
+
+    # Phase 2 — resume with approval on the SAME thread. The subgraph resumes at the gate and runs it.
+    resumed = _run(orch, Command(resume={"decisions": [{"type": "approve"}]}), config)
+    assert provider.sent == [
+        {"to": "priya@example.com", "body": "The cloves shipment is delayed two days."}
+    ]  # the approved write ran AFTER resume — proves resume re-entered the gate, didn't restart
+    assert "Sent the email to Priya" in resumed["messages"][-1].content
+
+
+def test_workspace_primitive_hitl_reject_skips_the_write_and_feeds_back():
+    """Rejecting a write must NOT run the tool; instead a synthetic ToolMessage tells the model the
+    operator declined, and the model self-corrects into a graceful reply."""
+    model = ScriptedChatModel(
+        [
+            ai_tool_call("send_email", {"to": "priya@example.com", "body": "delayed"}, "call-1"),
+            ai_final("Okay, I won't send it. Let me know if you'd like to revise and try again."),
+        ]
+    )
+    provider = RecordingToolsProvider()
+    agent = build_workspace_agent(model=model, tools_provider=provider, hitl="primitive")
+    orch = _workspace_orch(agent)
+    config = {"configurable": {"thread_id": "w-reject", "google_access_token": "tok"}}
+
+    paused = _run(orch, {"messages": [HumanMessage("email priya")]}, config)
+    assert _interrupt_payload(paused)["kind"] == WORKSPACE_APPROVAL_KIND
+
+    resumed = _run(
+        orch,
+        Command(resume={"decisions": [{"type": "reject", "message": "Not now."}]}),
+        config,
+    )
+    assert provider.sent == []  # rejected: the tool never ran
+    # the rejection became a ToolMessage the model read, then answered gracefully
+    tool_msgs = [m for m in resumed["messages"] if isinstance(m, ToolMessage)]
+    assert any("Not now." in (m.content or "") for m in tool_msgs)
+    assert "won't send it" in resumed["messages"][-1].content
+
+
+# --- human-in-the-loop on write actions (path A: create_agent + HumanInTheLoopMiddleware) ----------
+
+
+def test_workspace_middleware_hitl_pauses_then_resumes_on_approve():
+    """The contrast path: the SAME pause/resume behaviour, but produced by the prebuilt
+    `create_agent` + `HumanInTheLoopMiddleware` instead of the hand-written gate. Proves the
+    orchestrator node and the `{"decisions": [...]}` resume protocol don't care which mechanism is
+    active — and pins the middleware's actual interrupt payload shape (`action_requests`)."""
+    model = ScriptedChatModel(
+        [
+            ai_tool_call(
+                "send_email",
+                {"to": "priya@example.com", "body": "The cloves shipment is delayed two days."},
+                "call-1",
+            ),
+            ai_final("Sent the email to Priya about the delayed cloves shipment."),
+        ]
+    )
+    provider = RecordingToolsProvider()
+    agent = build_workspace_agent(model=model, tools_provider=provider, hitl="middleware")
+    orch = _workspace_orch(agent)
+    config = {"configurable": {"thread_id": "w-mw", "google_access_token": "tok-9"}}
+
+    paused = _run(orch, {"messages": [HumanMessage("email priya the cloves are delayed")]}, config)
+    payload = _interrupt_payload(paused)
+    assert payload is not None, "the middleware should have paused on the write"
+    # The middleware's payload carries `action_requests` (no `kind`); the web client detects either it
+    # or path B's `kind == workspace_approval`. The gated tool appears among the requested actions.
+    names = [a.get("name") or a.get("action") for a in payload["action_requests"]]
+    assert "send_email" in names
+    assert provider.sent == []  # gated by the middleware: nothing sent before approval
+
+    resumed = _run(orch, Command(resume={"decisions": [{"type": "approve"}]}), config)
+    assert provider.sent == [
+        {"to": "priya@example.com", "body": "The cloves shipment is delayed two days."}
+    ]  # the middleware ran the approved write on resume — same single `{decisions:[...]}` protocol
+    assert "Sent the email to Priya" in resumed["messages"][-1].content
+
+
+def test_workspace_middleware_hitl_self_corrects_on_tool_error():
+    """Regression for the create_agent/middleware path: a recoverable ToolException from an APPROVED
+    write must self-correct (become a curated ToolMessage the model repairs) — NOT propagate out of
+    the agent and degrade the turn. Without the `_self_correcting` tool wrapper this fails: the raise
+    escapes `create_agent` + `HumanInTheLoopMiddleware`, the orchestrator's `except` catches it, and
+    the operator gets a generic 'couldn't reach Workspace' reply instead of a graceful answer."""
+
+    def provider(*, access_token):  # noqa: ARG001 — token unused by the fake
+        @tool
+        def send_email(to: str, body: str) -> str:
+            """Send an email on the operator's behalf."""
+            raise ToolException("recipient address not found")
+
+        return [send_email]
+
+    model = ScriptedChatModel(
+        [
+            ai_tool_call("send_email", {"to": "bad", "body": "hi"}, "c1"),
+            ai_final("I couldn't send it — the address looked wrong; can you confirm it?"),
+        ]
+    )
+    agent = build_workspace_agent(model=model, tools_provider=provider, hitl="middleware")
+    orch = _workspace_orch(agent)
+    config = {"configurable": {"thread_id": "w-mw-err", "google_access_token": "tok"}}
+
+    _run(orch, {"messages": [HumanMessage("email someone")]}, config)  # pauses at the gate
+    resumed = _run(orch, Command(resume={"decisions": [{"type": "approve"}]}), config)
+
+    # The ToolException became a self-correction ToolMessage (not a propagated crash) and the model
+    # answered gracefully — proves the middleware path keeps the self-correcting loop.
+    tool_msgs = [m for m in resumed["messages"] if isinstance(m, ToolMessage)]
+    assert any("Re-read the available tools" in (m.content or "") for m in tool_msgs)
+    assert "couldn't send it" in resumed["messages"][-1].content
 
 
 def test_workspace_degrades_without_a_token():

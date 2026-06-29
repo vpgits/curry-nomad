@@ -8,7 +8,8 @@ import { useQueryState } from "nuqs";
 import { Button } from "@/components/ui/button";
 import { Eyebrow } from "@/components/ui/typography";
 import { Textarea } from "@/components/ui/textarea";
-import type { MarketingInterrupt, ReviewDecision, ReviewInterrupt, ScriptBeat } from "@/lib/types";
+import { isWorkspaceApproval } from "@/lib/types";
+import type { ReviewDecision, ReviewInterrupt, ScriptBeat, ThreadInterrupt } from "@/lib/types";
 import { useStreamContext } from "@/providers/Stream";
 import { cn } from "@/lib/utils";
 
@@ -20,11 +21,12 @@ import { cn } from "@/lib/utils";
 // (re-seeding local edit state from props) without a reset effect.
 export function BriefsApproval() {
   const stream = useStreamContext();
-  const interrupt = stream.interrupt?.value as MarketingInterrupt | undefined;
+  const interrupt = stream.interrupt?.value as ThreadInterrupt | undefined;
 
-  // Only the script-review gate is reviewed here; the concept-pick gate is an inline selection on
-  // /ask, so treat it as "nothing awaiting review".
-  if (!interrupt || interrupt.kind === "concept_pick") {
+  // Only the script-review gate is reviewed here. The concept-pick gate and the workspace
+  // write-approval gate are both inline selections on /ask, so treat them as "nothing awaiting
+  // review" (without the workspace guard, an approval would mis-render as an empty script review).
+  if (!interrupt || isWorkspaceApproval(interrupt) || interrupt.kind === "concept_pick") {
     return (
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 bg-body-bg p-10 text-center">
         <div className="text-base font-semibold">No briefs awaiting review</div>

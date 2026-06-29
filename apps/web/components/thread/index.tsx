@@ -9,9 +9,11 @@ import type { Message } from "@langchain/langgraph-sdk";
 
 import { AppShell } from "@/components/app-shell";
 import { ConceptPicker } from "@/components/ConceptPicker";
+import { WorkspaceApproval } from "@/components/workspace/workspace-approval";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { MarketingInterrupt } from "@/lib/types";
+import { isWorkspaceApproval } from "@/lib/types";
+import type { ThreadInterrupt } from "@/lib/types";
 import { AUTH_REQUIRED, WORKSPACE_ENABLED } from "@/lib/config";
 import { cn } from "@/lib/utils";
 import { getWorkspaceAccessToken } from "@/lib/workspace-client";
@@ -82,7 +84,7 @@ export function Thread() {
   const { status } = useSession();
 
   const messages = stream.messages.filter((m) => !m.id?.startsWith("do-not-render-"));
-  const interrupt = stream.interrupt?.value as MarketingInterrupt | undefined;
+  const interrupt = stream.interrupt?.value as ThreadInterrupt | undefined;
   const isLoading = stream.isLoading;
   const isEmpty = messages.length === 0 && !isLoading;
 
@@ -249,7 +251,7 @@ function MessageList({
   messages: Message[];
   isLoading: boolean;
   lastIsHuman: boolean;
-  interrupt: MarketingInterrupt | undefined;
+  interrupt: ThreadInterrupt | undefined;
   isEmpty: boolean;
   briefsHref: string;
   onPick: (text: string) => void;
@@ -315,7 +317,9 @@ function MessageList({
             {/* Two HITL gates. The concept-pick gate is an inline interactive selection (resumes
                 right here); the script-review gate hands off to the dedicated /briefs surface. */}
             {interrupt &&
-              (interrupt.kind === "concept_pick" ? (
+              (isWorkspaceApproval(interrupt) ? (
+                <WorkspaceApproval interrupt={interrupt} />
+              ) : interrupt.kind === "concept_pick" ? (
                 <ConceptPicker interrupt={interrupt} />
               ) : (
                 <MarketingProgressCard briefsHref={briefsHref} />

@@ -29,6 +29,7 @@ from typing import Literal
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
+from langgraph.errors import GraphBubbleUp
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.ui import push_ui_message
 from langgraph.types import Command
@@ -505,6 +506,13 @@ def build_orchestrator(
             new_messages = await workspace_agent(
                 state["messages"], access_token=token, config=config
             )
+        except GraphBubbleUp:
+            # A HITL `interrupt()` inside the workspace agent raises GraphInterrupt, which IS an
+            # `Exception` subclass — so the broad `except` below would SWALLOW it and degrade the pause
+            # to a text reply (HITL silently broken). Re-raise the whole GraphBubbleUp family
+            # (interrupt + resume control flow) so it propagates and pauses the orchestrator, exactly
+            # like marketing's deliberately-unwrapped `.invoke()` (see the marketing node above).
+            raise
         except Exception as exc:  # noqa: BLE001 — MCP/transport failure → text reply, never crash
             log.info("workspace.skipped", error=str(exc))
             return {

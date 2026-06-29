@@ -78,6 +78,18 @@ class Settings(BaseSettings):
     # Secrets (Google OAuth client id/secret, NEXTAUTH_SECRET) are NOT Settings fields — they're read
     # from the environment by the web layer + the Aegra auth handler, like every other provider key.
     workspace_enabled: bool = True  # master flag (NORA_WORKSPACE_ENABLED)
+    # Human-in-the-loop gate for the workspace agent's *write* actions (send email, create event).
+    # The single toggle that selects ONE mechanism so the two never double-gate the same tool:
+    #   - "middleware": LangChain's prebuilt `HumanInTheLoopMiddleware` on a `create_agent` workspace
+    #                   agent — the first-class framework HITL, and the DEFAULT. The middleware's
+    #                   `interrupt_on` policy pauses each write tool call before it runs.
+    #   - "primitive":  the hand-written loop's own batched `interrupt()` gate, kept as the
+    #                   "show the mechanism" contrast (mirrors marketing's explicit interrupt). Same
+    #                   `{"decisions": [...]}` resume protocol as middleware.
+    #   - "off":        no gate — writes run straight through (the original, pre-HITL behaviour).
+    # Default "middleware" → the framework gate is ON whenever the capability is enabled (the offline
+    # suite pins workspace OFF, so this default never perturbs it; HITL tests set the mode explicitly).
+    workspace_hitl: Literal["off", "primitive", "middleware"] = "middleware"  # NORA_WORKSPACE_HITL
     # The MCP server's streamable-http endpoint — note the `/mcp` path (the bare host returns 405).
     workspace_mcp_url: str = "http://localhost:8001/mcp"
     # Informational echo of the scopes the demo grants; the real enforcement is the MCP server's

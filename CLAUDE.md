@@ -179,7 +179,20 @@ tool set is **per-run, token-dependent**: `build_workspace_agent(...)`'s injecta
 (the analogue of routing's `route_planner`) mints a **fresh `MultiServerMCPClient` per run** with the
 operator's bearer token in the headers — the documented dodge for `langchain-mcp-adapters`' lack of
 per-request token swapping. Errors mirror analytics: a narrow `handle_workspace_error(ToolException)`
-becomes a ToolMessage for self-correction (don't broaden the catch). **Two auth planes, kept
+becomes a ToolMessage for self-correction (don't broaden the catch). **Write actions are gated by a
+human-approval HITL** (`NORA_WORKSPACE_HITL`, default `middleware`): a Gmail/Calendar agent acts
+irreversibly, so its *write* tool calls (send/create/update/delete — `is_write_tool`) pause for the
+operator before they run, while reads pass through. `workspace_hitl` selects **one** mechanism so the
+two never double-gate: `middleware` (the default) builds the agent via `create_agent` + LangChain's
+prebuilt `HumanInTheLoopMiddleware(interrupt_on=…)` — the first-class framework HITL; `primitive` is a
+hand-written contrast that keeps the spelled-out loop (its custom `tools` node calls `interrupt()`
+**once, batched** for all pending writes, mirroring marketing's explicit `interrupt()`). Both emit
+`action_requests` and resume with one `Command(resume={"decisions":[…]})` (approve / edit / reject),
+so the orchestrator node and the web client (`WorkspaceApproval`, detected by `isWorkspaceApproval`)
+don't care which is active. **Load-bearing:** the orchestrator's `workspace`
+node must `raise` the `GraphBubbleUp` family before its broad `except Exception` — `GraphInterrupt` IS
+an `Exception` subclass, so without the re-raise the pause is swallowed into a degraded text reply and
+HITL silently fails (marketing dodges this by never wrapping its `.invoke()`). **Two auth planes, kept
 separate:** *identity* (Plane 1) is per-operator — Aegra `AUTH_TYPE=custom` + `auth.py` verifies the
 NextAuth-minted HS256 session JWT (`NEXTAUTH_SECRET`, never a `Settings` field) so threads scope per
 user; *authorization* (Plane 2) is a **separate, incremental** Google grant (the web app's

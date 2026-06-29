@@ -97,6 +97,48 @@ export interface ConceptPickInterrupt {
 // Either marketing interrupt — distinguished by `kind` (concept_pick has no script_beats).
 export type MarketingInterrupt = ReviewInterrupt | ConceptPickInterrupt;
 
+// One pending write the workspace agent wants to run (send/create/…), awaiting human approval. Both
+// HITL backends expose `name` + `args` (the installed HumanInTheLoopMiddleware uses `args`, same key
+// as the hand-written gate); `arguments` is tolerated as a fallback. `id` is present on path B only.
+export interface WorkspaceActionRequest {
+  name: string;
+  args?: Record<string, unknown>;
+  arguments?: Record<string, unknown>;
+  id?: string;
+  description?: string;
+}
+
+// Payload emitted when the workspace agent pauses before write actions. Unifies BOTH mechanisms:
+//   - path B ("primitive"): the hand-written loop's interrupt() — sets `kind: "workspace_approval"`.
+//   - path A ("middleware"): create_agent + HumanInTheLoopMiddleware — adds `review_configs`, no kind.
+export interface WorkspaceApprovalInterrupt {
+  kind?: "workspace_approval";
+  question?: string;
+  action_requests: WorkspaceActionRequest[];
+  review_configs?: unknown[];
+}
+
+// One decision sent back on resume (read by the gate node / middleware), one per action in order.
+export interface WorkspaceDecision {
+  type: "approve" | "edit" | "reject";
+  edited_action?: { name: string; args: Record<string, unknown> };
+  message?: string;
+}
+
+// Any interrupt the thread might surface. The workspace gate is detected by `action_requests`
+// (present on both its backends, absent on the marketing gates) — see isWorkspaceApproval.
+export type ThreadInterrupt = MarketingInterrupt | WorkspaceApprovalInterrupt;
+
+// Discriminator: a workspace write-approval interrupt carries an `action_requests` array (the
+// marketing concept_pick/script_review gates never do). Check this BEFORE casting to MarketingInterrupt.
+export function isWorkspaceApproval(value: unknown): value is WorkspaceApprovalInterrupt {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    Array.isArray((value as { action_requests?: unknown }).action_requests)
+  );
+}
+
 // The analytics generative-UI dashboard (mirrors AnalyticsDashboard in schemas.py). Rendered by
 // the useStream UI via LoadExternalComponent.
 export interface DashboardStat {
