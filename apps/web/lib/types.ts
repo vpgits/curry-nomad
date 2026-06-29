@@ -132,9 +132,10 @@ export interface AnalyticsDashboardData {
 }
 
 // The LLM-authored A2UI surface (mirrors A2uiSurface in schemas.py): an ordered list of catalog
-// blocks the model composes per query. Rendered on /studio by A2uiSurfaceView. One flat block
-// shape (not a discriminated union) — `type` selects which fields are populated — matching the
-// backend (which flattens to dodge OpenAI strict structured-output's union limits).
+// blocks the model composes per query. Rendered inline on /ask by A2uiSurfaceView when the "Author
+// UI" output mode is on (ui_mode="authored"). One flat block shape (not a discriminated union) —
+// `type` selects which fields are populated — matching the backend (which flattens to dodge
+// OpenAI strict structured-output's union limits).
 export interface A2uiMetric {
   label: string;
   value: string;

@@ -41,14 +41,14 @@ Monorepo with two sibling apps under `apps/`:
 - `apps/nora/` — the Python backend (package `nora` under `apps/nora/src/nora/`, plus `tests/`,
   `evals/`, `scripts/`). Subpackages: `analytics/` (the agent), `marketing/` (the workflow),
   `operations/` (the deterministic ops backend + REST API), `workspace/` (the optional Google
-  Workspace MCP agent), `services/` (ports & adapters), plus `orchestrator.py` (router),
-  `auth.py` (the optional Aegra custom-auth handler for per-operator identity), and `a2ui_studio.py`
-  (a second graph: the dynamic-schema gen-UI showcase).
+  Workspace MCP agent), `services/` (ports & adapters), plus `orchestrator.py` (the supervisor that
+  delegates to the capabilities) and `auth.py` (the optional Aegra custom-auth handler for
+  per-operator identity).
 - `apps/web/` — the Next.js frontend (Agent Protocol client; renders the native gen-UI cards).
 
 It's a **single root Python package**: `pyproject.toml`, `uv.lock`, and the `aegra.json`
-graph config live at the **repo root** — run every command from there. `aegra.json` registers
-**two graphs**: `nora` (the orchestrator) and `nora_a2ui` (the studio). Unless a
+graph config live at the **repo root** — run every command from there. `aegra.json` registers the
+**`nora`** graph (the orchestrator/supervisor). Unless a
 path is given from the repo root, file references below are relative to the `nora` package
 (`apps/nora/src/nora/`).
 
@@ -62,7 +62,7 @@ uv run python -m nora.data.seed                  # rebuild the bundled read-only
 uv run python -m nora.operations.seed            # (re)build the WRITABLE operations DB (data/runtime/operations.db; needs --extra operations)
 uv run python -m nora.app "What was our best-selling product in Colombo last quarter?"   # run one turn (needs provider key)
 uv run python apps/nora/evals/run_evals.py --suite all   # eval suites: analytics | marketing | all (needs provider key)
-uv run --extra aegra aegra dev                    # serve the `nora` + `nora_a2ui` graphs over the Agent Protocol (Aegra; starts Postgres via Docker)
+uv run --extra aegra aegra dev                    # serve the `nora` graph over the Agent Protocol (Aegra; starts Postgres via Docker)
 uv run --extra operations nora-ops-api            # serve the operations REST API on :8000 (no LLM, no API key)
 
 uv run pytest                                    # full offline test suite (NO API key needed)
@@ -91,7 +91,7 @@ model with `thinking=` + `temperature=1`; the frontend pulls it via `getReasonin
 
 ### Web stack (optional)
 ```bash
-uv run --extra aegra aegra dev                    # serve `nora`/`nora_a2ui` over the Agent Protocol on :2026 (Postgres via Docker; needs OPENAI_API_KEY)
+uv run --extra aegra aegra dev                    # serve the `nora` graph over the Agent Protocol on :2026 (Postgres via Docker; needs OPENAI_API_KEY)
 uv run --extra operations nora-ops-api            # serve the ops REST API on :8000 (the `routing` capability + /stock /orders /routes call it)
 uv run python apps/nora/scripts/seed_store.py    # seed brand voice + metric definitions into the running Store
 cd apps/web && pnpm install && pnpm dev          # Next.js UI on :3000
@@ -100,7 +100,8 @@ Unlike `langgraph dev`, Aegra does not enforce a blocking-call check, so Nora's 
 `.invoke()` subgraph calls (and synchronous SQLite) need no special flag. Aegra is Postgres-backed,
 so threads/Store persist across restarts. The web app's routes: `/` (home), `/ask` (chat with
 inline gen-UI), `/stock` `/orders` `/routes` `/inventory` (operations, fed by the ops API),
-`/briefs` (marketing HITL), and `/studio` (the `nora_a2ui` dynamic-schema gen-UI showcase). Routing
+`/briefs` (marketing HITL). The A2UI "model authors the UI" showcase is now an **Author UI**
+output-mode toggle on `/ask` (no separate `/studio` route). Routing
 asks and the operations pages need the **ops API running** (its absence degrades to a text reply,
 never a crash).
 
@@ -122,8 +123,8 @@ injectable for offline tests) and pushes a `route_map` card.
 - `build_orchestrator(...)` / `build_*_graph(...)`: explicit constructors with **injectable**
   `model`, `checkpointer`, `store` (and `spice_db`, `auto_approve`, `auto_choose`, `route_planner`,
   `dashboard_model`). This is how tests and the CLI wire things.
-- `make_graph()` / `make_a2ui_graph()` (referenced by `aegra.json` as `nora` / `nora_a2ui`):
-  compile **without** a checkpointer/store because the *platform* (Aegra) injects persistence
+- `make_graph()` (referenced by `aegra.json` as `nora`):
+  compiles **without** a checkpointer/store because the *platform* (Aegra) injects persistence
   (Postgres checkpointer) + the semantic Store at runtime. The CLI (`app.py`) is the self-contained
   path and builds its own in-memory ones.
 
@@ -213,11 +214,13 @@ first-frame URL** OpenRouter can fetch (`NORA_MEDIA_PUBLIC_BASE_URL`) — `local
 without it the renderer falls back to text→video (recorded in `render_result.mode`). The OpenRouter
 HTTP client is **injectable**, so the renderer's tests run fully offline against a fake.
 
-**A2UI studio — the dynamic-schema contrast (`a2ui_studio.py`, graph `nora_a2ui`).** Where the
-analytics path attaches a *fixed* dashboard shape, this graph (`analytics → ui_author`) lets a
-"UI-author" model **compose** the surface from an ordered list of catalog blocks (`A2uiSurface` /
-`A2uiBlock` in `schemas.py`) — the "LLM authors the UI" pattern, rendered by the `/studio` web
-surface. Note `A2uiBlock` is deliberately **one flat model with optional per-type fields, not a
+**A2UI authored-UI mode — the dynamic-schema contrast (`orchestrator.py`, `_author_surface`).** Where
+the analytics path normally attaches a *fixed* dashboard shape, an **output mode** lets a "UI-author"
+model **compose** the surface from an ordered list of catalog blocks (`A2uiSurface` / `A2uiBlock` in
+`schemas.py`) — the "LLM authors the UI" pattern. It's selected per-run by
+`config.configurable.ui_mode == "authored"` (the web client's **Author UI** toggle on `/ask`); the
+`analytics_dashboard` node then pushes an `a2ui_surface` card instead of `analytics_dashboard`. (This
+was the separate `nora_a2ui` / `/studio` graph — folded into the analytics path now.) Note `A2uiBlock` is deliberately **one flat model with optional per-type fields, not a
 discriminated union** — OpenAI strict structured-output rejects `anyOf`/`oneOf`, so a union would
 make the authoring call throw. Same lesson constrains `AnalyticsDashboard`.
 

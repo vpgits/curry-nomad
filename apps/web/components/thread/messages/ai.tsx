@@ -6,6 +6,7 @@ import type { Message } from "@langchain/langgraph-sdk";
 
 import { LoadExternalComponent } from "@langchain/langgraph-sdk/react-ui";
 
+import { A2uiSurfaceView } from "@/components/A2uiSurfaceView";
 import { AnalyticsDashboard } from "@/components/AnalyticsDashboard";
 import { CritiqueCard } from "@/components/CritiqueCard";
 import { MarketingRenderCard } from "@/components/MarketingRenderCard";
@@ -25,6 +26,10 @@ import { BranchSwitcher } from "./shared";
 // to ride additional_kwargs); each ui.name keys into this map.
 const UI_COMPONENTS = {
   analytics_dashboard: AnalyticsDashboard,
+  // The "Author UI" output mode: when the composer toggles ui_mode="authored", the analytics path
+  // pushes this LLM-composed surface (A2uiSurface) instead of the fixed analytics_dashboard. It
+  // matches none of the marketing/routing/workspace sets below, so the turn stays labeled analytics.
+  a2ui_surface: A2uiSurfaceView,
   video_brief: VideoBriefCard,
   marketing_storyboard: StoryboardFilmstrip,
   marketing_script_timeline: ScriptTimeline,

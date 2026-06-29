@@ -3,10 +3,6 @@
 // build-time public env vars — there is no browser-side secret (Aegra is keyless locally).
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:2026";
 export const ASSISTANT_ID = process.env.NEXT_PUBLIC_ASSISTANT_ID ?? "nora";
-// The A2UI "studio" showcase runs a second graph (a2ui_studio.py:make_a2ui_graph). Its threads are
-// tagged with this graph_id so the history sidebar can list them and route them back to /studio.
-export const STUDIO_ASSISTANT_ID =
-  process.env.NEXT_PUBLIC_STUDIO_ASSISTANT_ID ?? "nora_a2ui";
 
 // The deterministic operations system (inventory + orders + delivery routing) is served by a
 // separate FastAPI app — `uv run --extra operations uvicorn nora.operations.api:app --port 8000`.

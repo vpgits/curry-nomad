@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useQueryState } from "nuqs";
 import { useSession } from "next-auth/react";
-import { ArrowDown, ArrowUp, Square } from "lucide-react";
+import { ArrowDown, ArrowUp, Sparkles, Square } from "lucide-react";
 import type { Message } from "@langchain/langgraph-sdk";
 
 import { AppShell } from "@/components/app-shell";
@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { MarketingInterrupt } from "@/lib/types";
 import { AUTH_REQUIRED, WORKSPACE_ENABLED } from "@/lib/config";
+import { cn } from "@/lib/utils";
 import { getWorkspaceAccessToken } from "@/lib/workspace-client";
 import { useStreamContext } from "@/providers/Stream";
 import { SignInGate } from "@/components/auth/sign-in-gate";
@@ -33,6 +34,9 @@ const SUGGESTIONS = [
 export function Thread() {
   const stream = useStreamContext();
   const [threadId] = useQueryState("threadId");
+  // Output-mode toggle (A2UI). When "authored", the run asks the analytics path to compose a custom
+  // UI surface (ui_mode="authored") instead of the fixed dashboard; null = the default dashboard.
+  const [uiMode, setUiMode] = useQueryState("ui");
   const [input, setInput] = useState("");
   const { status } = useSession();
 
@@ -49,10 +53,16 @@ export function Thread() {
     const content = text.trim();
     if (!content) return;
     setInput("");
-    // Workspace capability: when enabled, fetch the operator's current Google access token and pass
-    // it per-run in config.configurable. The backend `workspace` node reads it to act on Gmail/
-    // Calendar; other capabilities ignore it. Null (not connected) → the node prompts to connect.
+    // Per-run config rides in config.configurable. Two independent keys can land here:
+    //   - google_access_token: the Workspace capability's per-run Google token (when enabled +
+    //     connected); the backend `workspace` node reads it, other capabilities ignore it.
+    //   - ui_mode: "authored" when the "Author UI" toggle is on, so the analytics path composes an
+    //     A2UI surface instead of the fixed dashboard.
+    // Merge both under one configurable object so neither clobbers the other.
     const googleToken = WORKSPACE_ENABLED ? await getWorkspaceAccessToken() : null;
+    const configurable: Record<string, unknown> = {};
+    if (googleToken) configurable.google_access_token = googleToken;
+    if (uiMode === "authored") configurable.ui_mode = "authored";
     stream.submit(
       { messages: [{ type: "human", content }] },
       {
@@ -60,9 +70,7 @@ export function Thread() {
         // Stream the analytics agent subgraph's messages too — its run_sql steps and the final
         // answer flow in live (the subgraph is a real node in the orchestrator graph).
         streamSubgraphs: true,
-        ...(googleToken
-          ? { config: { configurable: { google_access_token: googleToken } } }
-          : {}),
+        ...(Object.keys(configurable).length > 0 ? { config: { configurable } } : {}),
         optimisticValues: (prev) => ({
           ...prev,
           messages: [
@@ -102,8 +110,27 @@ export function Thread() {
 
       <footer className="shrink-0 border-t bg-background">
         <WorkspaceConnect />
+        <div className="mx-auto flex max-w-3xl items-center justify-end px-[26px] pt-3">
+          {/* Output-mode toggle: when on, an analytics answer comes back as an LLM-authored A2UI
+              surface instead of the fixed dashboard (sets ui_mode="authored" on the run). */}
+          <button
+            type="button"
+            onClick={() => void setUiMode(uiMode === "authored" ? null : "authored")}
+            aria-pressed={uiMode === "authored"}
+            title="Let Nora compose a custom UI for the answer (A2UI)"
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-semibold transition-colors",
+              uiMode === "authored"
+                ? "border-brand-edge bg-brand-tint text-brand-text"
+                : "border-border bg-card text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <Sparkles className="size-3.5" />
+            Author UI
+          </button>
+        </div>
         <form
-          className="mx-auto flex max-w-3xl items-center gap-2.5 px-[26px] py-4"
+          className="mx-auto flex max-w-3xl items-center gap-2.5 px-[26px] pt-2.5 pb-4"
           onSubmit={(e) => {
             e.preventDefault();
             void send(input);

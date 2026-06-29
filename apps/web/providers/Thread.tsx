@@ -11,7 +11,7 @@ import {
 } from "react";
 import type { Thread } from "@langchain/langgraph-sdk";
 
-import { API_URL, ASSISTANT_ID, AUTH_REQUIRED, STUDIO_ASSISTANT_ID } from "@/lib/config";
+import { API_URL, ASSISTANT_ID, AUTH_REQUIRED } from "@/lib/config";
 import { aegraAuthHeaders } from "@/lib/auth-headers";
 import { createClient } from "./client";
 
@@ -28,9 +28,8 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(false);
 
-  // Aegra tags each thread's metadata with the last graph it ran (`graph_id`). We list BOTH the main
-  // `nora` chat and the `nora_a2ui` studio threads (two searches, merged) so the history sidebar
-  // shows them together; the sidebar reads each thread's graph_id to route it to /ask vs /studio.
+  // Aegra tags each thread's metadata with the last graph it ran (`graph_id`). We list the main
+  // `nora` chat threads so the history sidebar shows them; all open on /ask.
   const getThreads = useCallback(async (): Promise<Thread[]> => {
     setThreadsLoading(true);
     try {
@@ -38,16 +37,7 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
       // Custom-auth mode: don't hit Aegra (it would 401) until the operator is signed in.
       if (AUTH_REQUIRED && !headers.Authorization) return [];
       const client = createClient(API_URL, undefined, headers);
-      const [main, studio] = await Promise.all([
-        client.threads.search({ metadata: { graph_id: ASSISTANT_ID }, limit: 100 }),
-        client.threads.search({ metadata: { graph_id: STUDIO_ASSISTANT_ID }, limit: 100 }),
-      ]);
-      const seen = new Set<string>();
-      return [...main, ...studio].filter((t) => {
-        if (seen.has(t.thread_id)) return false;
-        seen.add(t.thread_id);
-        return true;
-      });
+      return await client.threads.search({ metadata: { graph_id: ASSISTANT_ID }, limit: 100 });
     } finally {
       setThreadsLoading(false);
     }

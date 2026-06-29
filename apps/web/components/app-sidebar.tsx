@@ -13,7 +13,6 @@ import {
   MessageSquare,
   Package,
   ScrollText,
-  Sparkles,
   SquarePen,
   Truck,
 } from "lucide-react";
@@ -41,12 +40,8 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { useThreads } from "@/providers/Thread";
-import { AUTH_REQUIRED, STUDIO_ASSISTANT_ID } from "@/lib/config";
+import { AUTH_REQUIRED } from "@/lib/config";
 import { cn } from "@/lib/utils";
-
-function threadGraphId(thread: Thread): string | undefined {
-  return (thread.metadata as { graph_id?: string } | undefined)?.graph_id;
-}
 
 type NavItem = {
   href: string;
@@ -60,7 +55,6 @@ type NavItem = {
 const NAV_TOP: NavItem[] = [
   { href: "/", label: "Home", icon: Home },
   { href: "/ask", label: "Ask Nora", icon: MessageSquare },
-  { href: "/studio", label: "Studio", icon: Sparkles },
 ];
 const NAV_OPS: NavItem[] = [
   { href: "/stock", label: "Stock", icon: Package, badge: "3" },
@@ -189,7 +183,6 @@ function SidebarAccount() {
 export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
   const { threads, setThreads, getThreads, threadsLoading } = useThreads();
   const [threadId, setThreadId] = useQueryState("threadId");
-  const [studioThreadId] = useQueryState("t"); // /studio's own thread key
   const { setOpenMobile } = useSidebar();
   const pathname = usePathname();
   const router = useRouter();
@@ -204,12 +197,9 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
     setOpenMobile(false);
     if (pathname !== "/ask") router.push("/ask");
   };
-  // Open a thread on the surface that owns its graph: studio threads → /studio (their `t` key),
-  // everything else → /ask (its `threadId` key, set in place when already there).
+  // Open a thread on /ask (its `threadId` key, set in place when already there).
   const openThread = (thread: Thread) => {
-    if (threadGraphId(thread) === STUDIO_ASSISTANT_ID) {
-      router.push(`/studio?t=${thread.thread_id}`);
-    } else if (pathname === "/ask") {
+    if (pathname === "/ask") {
       setThreadId(thread.thread_id);
     } else {
       router.push(`/ask?threadId=${thread.thread_id}`);
@@ -312,10 +302,7 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
                 ) : (
                   <SidebarMenu>
                     {ordered.map((t) => {
-                      const isStudio = threadGraphId(t) === STUDIO_ASSISTANT_ID;
-                      const active = isStudio
-                        ? pathname === "/studio" && t.thread_id === studioThreadId
-                        : pathname === "/ask" && t.thread_id === threadId;
+                      const active = pathname === "/ask" && t.thread_id === threadId;
                       return (
                         <SidebarMenuItem key={t.thread_id}>
                           <SidebarMenuButton
@@ -324,12 +311,7 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
                             tooltip={threadTitle(t)}
                             className="text-[13px]"
                           >
-                            {isStudio ? (
-                              <Sparkles
-                                className="size-3 shrink-0 text-brand"
-                                aria-label="Studio (A2UI)"
-                              />
-                            ) : t.status === "interrupted" ? (
+                            {t.status === "interrupted" ? (
                               <span
                                 className="size-1.5 shrink-0 rounded-full bg-brand"
                                 title="Awaiting review"

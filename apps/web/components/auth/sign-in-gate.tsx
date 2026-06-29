@@ -4,8 +4,8 @@ import { signIn } from "next-auth/react";
 
 import { Button } from "@/components/ui/button";
 
-// Shown on Aegra-backed pages (/ask, /studio) when AUTH_REQUIRED is on and the operator isn't signed
-// in (custom-auth mode). Centralizes the sign-in prompt so both surfaces stay consistent.
+// Shown on the Aegra-backed /ask page when AUTH_REQUIRED is on and the operator isn't signed in
+// (custom-auth mode). Centralizes the sign-in prompt.
 export function SignInGate({ loading = false }: { loading?: boolean }) {
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center bg-body-bg">

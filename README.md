@@ -92,7 +92,7 @@ The UI streams Nora's answers and renders the native **generative-UI cards** pus
 via `LoadExternalComponent`: an analytics **dashboard**, the marketing **concept-pick** and
 **script-approval** gates plus the final storyboard / timeline / critique, and a Leaflet
 **route map**. Dedicated operations pages (`/stock`, `/orders`, `/routes`, `/inventory`) read the
-ops REST API, and `/studio` shows the dynamic-schema "LLM authors the UI" graph. See
+ops REST API, and an **Author UI** toggle on `/ask` shows the dynamic-schema "LLM authors the UI" mode. See
 [`apps/web/`](apps/web/) for details.
 
 ### Provider switch (one line)
@@ -129,7 +129,7 @@ semantic Store even when the chat model is Anthropic — or point it at another 
 | **NP-hard delivery routing (no LLM)** | `operations/routing.py` (nearest-neighbor + 2-opt) | Operations |
 | **Agent over external tools (MCP) + OAuth** *(optional)* | `workspace/graph.py`, `auth.py`, web `app/api/google/*` | Workspace |
 | **Native generative UI (`push_ui_message`)** | `orchestrator.py` / `marketing` cards → web `LoadExternalComponent` | Generative UI |
-| **Dynamic-schema UI (LLM authors the UI)** | `a2ui_studio.py`, `schemas.py` `A2uiSurface`, web `/studio` | Generative UI |
+| **Dynamic-schema UI (LLM authors the UI)** | `orchestrator.py` `_author_surface`, `schemas.py` `A2uiSurface`, web "Author UI" toggle on `/ask` | Generative UI |
 | **Observability (structlog + LangSmith / Langfuse)** | `observability.py`, `docker-compose.langfuse.yml` | Observability + evals (1:05–1:25) |
 | **Evaluation (deterministic + LLM-judge)** | `evals/` | Observability + evals |
 | Ports & adapters, reliability | `services/`, `operations/interfaces.py`, `tenacity`, typed `SqlError` / `OperationsError` | Extensibility (1:25–1:30) |
@@ -161,9 +161,10 @@ nearest-neighbor → 2-opt) the agent *calls* rather than guessing a tour. Rejec
 
 **Generative UI (native `push_ui_message`).** Each capability attaches typed UI cards to its final
 message; the web client renders them with `LoadExternalComponent` (no CopilotKit). The analytics
-dashboard is composed by a model from the answer + the SQL it ran; the `a2ui_studio.py` graph goes
-further and lets a model *author* the surface from a block catalog (the `/studio` showcase). Gen-UI
-is always best-effort — a failure skips the card, never the text answer.
+dashboard is composed by a model from the answer + the SQL it ran; an **Author UI** output mode on
+`/ask` (`config.configurable.ui_mode == "authored"`) goes further and lets a model *author* the
+surface from a block catalog (the `a2ui_surface` card). Gen-UI is always best-effort — a failure
+skips the card, never the text answer.
 
 **Memory (`memory.py`).** A checkpointer (short-term, makes interrupt/resume work) and a semantic
 Store (long-term). Both are compiled into the graph and actually read in nodes via `runtime.store`:
@@ -216,8 +217,7 @@ apps/
       schemas.py           Pydantic LLM contracts + Context dataclass
       state.py             TypedDict graph states + reducers
       memory.py            build_store / build_checkpointer / seed_brand_knowledge
-      orchestrator.py      the router graph (entry point) + make_graph for Aegra
-      a2ui_studio.py       the dynamic-schema gen-UI graph (nora_a2ui) + make_a2ui_graph
+      orchestrator.py      the supervisor graph (entry point) + make_graph for Aegra
       app.py               demo CLI (streams a turn, prompts on HITL)
       analytics/           tools.py · prompts.py · graph.py   (the AGENT)
       marketing/           prompts.py · nodes.py · graph.py   (the WORKFLOW)
@@ -230,7 +230,7 @@ apps/
   web/                      Next.js chat UI (Agent Protocol client)
 docs/  specs/              case-study plan + build specs (read in order)
 pyproject.toml  uv.lock    single root Python package
-aegra.json                 graph + serving config (Aegra; registers nora + nora_a2ui)
+aegra.json                 graph + serving config (Aegra; registers the nora graph)
 ```
 
 ## Testing

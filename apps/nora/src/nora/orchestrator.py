@@ -37,7 +37,7 @@ from nora.analytics.graph import build_analytics_graph
 from nora.config import Settings, get_settings
 from nora.marketing.graph import build_marketing_graph, initial_marketing_state
 from nora.observability import get_logger
-from nora.schemas import AnalyticsDashboard, Context
+from nora.schemas import A2uiSurface, AnalyticsDashboard, Context
 from nora.state import OrchestratorState
 
 log = get_logger(__name__)
@@ -209,6 +209,49 @@ def _build_dashboard(model, answer: str, query_results: str) -> AnalyticsDashboa
     return dashboard
 
 
+# --- A2UI: the "model authors the UI" output mode (folded in from the former /studio graph) ---
+# Where _build_dashboard attaches a FIXED dashboard shape (the code picks the components), this lets a
+# model COMPOSE the surface from an ordered list of catalog blocks (the dynamic-schema A2UI pattern).
+# It's the same analytics answer, rendered a different way — selected per-run by config.configurable
+# ui_mode == "authored". Same disable_streaming model as the dashboard; same best-effort discipline.
+A2UI_AUTHOR_INSTRUCTIONS = (
+    "Compose a UI to present this analytics answer to a Sri Lankan spice-business operator. YOU "
+    "choose the layout: emit an ordered list of blocks (each block sets `type` and only the fields "
+    "that type uses) that best fits the data.\n"
+    "- type 'heading': set `text` to a short surface title.\n"
+    "- type 'text': set `text` to one sentence of explanation or insight.\n"
+    "- type 'metrics': set `metrics` to a row of KPI tiles (each label + pre-formatted value, "
+    "optional trend 'up'/'down'/'neutral' with a trend_value like '+12%').\n"
+    "- type 'chart': set `title`, `chart_kind` ('bar' for ranking/comparison, 'line' for a trend "
+    "over time, 'pie' for part-of-whole), and `series` (a list of {label, value}).\n"
+    "- type 'table': set `columns` and `rows` (stringified cells), for detail.\n"
+    "Lead with a heading, then the most decision-relevant block; add a chart whenever the data has "
+    "a natural shape. Keep it tight (2-5 blocks). If the answer isn't data-worthy, return no blocks."
+)
+
+
+def _author_surface(model, answer: str, query_results: str) -> A2uiSurface | None:
+    """Best-effort LLM-authored surface from the answer + the SQL the agent ran. Returns None (and
+    the caller renders nothing) on failure or a non-data answer — generative UI is never load-bearing
+    for the text answer (mirrors _build_dashboard)."""
+    if not answer.strip():
+        return None
+    context = f"Answer:\n{answer[:4000]}"  # cap both inputs so a long answer can't blow the token budget
+    if query_results:
+        context += f"\n\nQuery results the answer is based on:\n{query_results[:2000]}"
+    try:
+        surface: A2uiSurface = model.with_structured_output(A2uiSurface).invoke(
+            [SystemMessage(content=A2UI_AUTHOR_INSTRUCTIONS), HumanMessage(content=context)]
+        )
+    except Exception as exc:  # noqa: BLE001 — optional generative UI: never break the text answer
+        log.info("a2ui.skipped", error=str(exc))
+        return None
+    if not surface.blocks:
+        return None
+    log.info("a2ui.authored", blocks=len(surface.blocks))
+    return surface
+
+
 def build_orchestrator(
     *,
     settings: Settings | None = None,
@@ -307,24 +350,40 @@ def build_orchestrator(
         log.info("supervisor.clarify")
         return Command(goto=END, update={"messages": [ai]})
 
-    def analytics_dashboard(state: OrchestratorState) -> dict:
+    def analytics_dashboard(state: OrchestratorState, config) -> dict:
         # Runs right AFTER the analytics agent subgraph node. The agent's full tool loop — its
         # run_sql calls, their results, and the streamed final answer — has already flowed into the
         # top-level thread as inline messages (that's the streaming we want). Here we add the one
-        # thing that isn't a chat message: the generative-UI dashboard, composed from the final
-        # answer + the SQL results the agent saw, pushed via push_ui_message (the useStream UI
-        # renders it via LoadExternalComponent). Best-effort — skips silently if generation fails
-        # (no provider key offline) or nothing is dashboard-worthy; the answer is never blocked on it.
+        # thing that isn't a chat message: the generative-UI surface, composed from the final answer
+        # + the SQL results the agent saw, pushed via push_ui_message (the useStream UI renders it via
+        # LoadExternalComponent). Best-effort — skips silently if generation fails (no provider key
+        # offline) or nothing is data-worthy; the answer is never blocked on it.
+        #
+        # Output mode (the former /studio showcase, folded in): config.configurable.ui_mode ==
+        # "authored" lets the model COMPOSE the surface from a block catalog (push "a2ui_surface");
+        # otherwise the code attaches the FIXED dashboard shape (push "analytics_dashboard").
         if dashboard_model is None:
             return {}
         messages = state["messages"]
         final = messages[-1]
         answer = final.content if isinstance(final.content, str) else str(final.content)
-        dashboard = _build_dashboard(dashboard_model, answer, _sql_results_from_messages(messages))
+        sql = _sql_results_from_messages(messages)
+        ui_mode = (config or {}).get("configurable", {}).get("ui_mode")
+
+        if ui_mode == "authored":
+            surface = _author_surface(dashboard_model, answer, sql)
+            if surface is None:
+                return {}
+            data = surface.model_dump()
+            # Same id → add_messages updates the final message in place (no duplicate).
+            final.additional_kwargs = {**(final.additional_kwargs or {}), "a2ui_surface": data}
+            push_ui_message("a2ui_surface", data, message=final)
+            return {"messages": [final]}
+
+        dashboard = _build_dashboard(dashboard_model, answer, sql)
         if dashboard is None:
             return {}
         data = dashboard.model_dump()
-        # Same id → add_messages updates the final message in place (no duplicate).
         final.additional_kwargs = {**(final.additional_kwargs or {}), "dashboard": data}
         push_ui_message("analytics_dashboard", data, message=final)
         return {"messages": [final]}

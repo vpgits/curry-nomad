@@ -13,7 +13,6 @@ from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
-from nora.a2ui_studio import build_a2ui_graph
 from nora.analytics.graph import build_analytics_graph
 from nora.config import Settings
 from nora.marketing.graph import build_marketing_graph, initial_marketing_state
@@ -181,12 +180,13 @@ def test_build_dashboard_skips_when_chart_kind_is_none():
     assert _build_dashboard(model, answer="A one-off number.", query_results="") is None
 
 
-# --- A2UI studio: the LLM-authored surface --------------------------------------------
+# --- A2UI: the LLM-authored surface (an output MODE of the analytics path, formerly /studio) ------
 
 
-def test_a2ui_studio_pushes_an_authored_surface_on_the_ui_channel():
-    """The studio graph runs analytics, then a UI-author model composes a block surface that lands
-    on the same generative-UI channel the dashboard uses (the /studio surface renders it)."""
+def test_authored_ui_mode_pushes_an_a2ui_surface():
+    """With config.configurable.ui_mode == "authored", the analytics path's dashboard node lets the
+    model COMPOSE the surface (the old /studio A2UI showcase, folded into /ask as an output mode) and
+    pushes `a2ui_surface` on the ui channel instead of the fixed `analytics_dashboard`."""
     surface = A2uiSurface(
         blocks=[
             A2uiBlock(type="heading", text="Top sellers"),
@@ -198,16 +198,28 @@ def test_a2ui_studio_pushes_an_authored_surface_on_the_ui_channel():
             ),
         ]
     )
-    graph = build_a2ui_graph(
+    orch = build_orchestrator(
+        supervisor_model=ScriptedChatModel(
+            [ai_tool_call("to_analytics", {"task": "top sellers"}, "h1"), ai_final("")]
+        ),
         analytics_graph=build_analytics_graph(model=ScriptedChatModel([ai_final("Cinnamon leads.")])),
-        author_model=ScriptedStructuredModel({A2uiSurface: [surface]}),
+        marketing_graph=object(),  # never invoked on an analytics turn
+        # The dashboard node uses this model for BOTH the fixed dashboard and the authored surface;
+        # here it returns an A2uiSurface (the authored-mode structured output).
+        dashboard_model=ScriptedStructuredModel({A2uiSurface: [surface]}),
+        checkpointer=InMemorySaver(),
     )
-    result = graph.invoke({"messages": [HumanMessage("top sellers?")]})
+    result = orch.invoke(
+        {"messages": [HumanMessage("top sellers?")]},
+        {"configurable": {"thread_id": "a2ui", "ui_mode": "authored"}},
+    )
     pushed = [u for u in result.get("ui", []) if u.get("name") == "a2ui_surface"]
-    assert pushed, "the authored surface must be pushed on the ui channel"
+    assert pushed, "authored mode must push an a2ui_surface (not the fixed dashboard)"
     blocks = pushed[0]["props"]["blocks"]
     assert [b["type"] for b in blocks] == ["heading", "chart"]  # the model's chosen composition
     assert blocks[1]["chart_kind"] == "bar"
+    # And NOT the fixed dashboard card.
+    assert not any(u.get("name") == "analytics_dashboard" for u in result.get("ui", []))
 
 
 # Note: route planning is no longer a chat capability — it lives on the ops REST API + the /routes
