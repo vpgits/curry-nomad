@@ -8,6 +8,14 @@ Offline by default: it runs the actual graphs against the bundled DB with the co
 (so it needs a provider key, e.g. OPENAI_API_KEY — but no external data and no LangSmith). The
 suite functions accept injected models, which is how the harness itself is tested without a key.
 `--langsmith` additionally pushes the analytics suite to LangSmith `evaluate` for the dashboard.
+
+Langfuse tracing is *auto-on* (no flag), mirroring the chat path in `nora.app`: when
+`LANGFUSE_PUBLIC_KEY` is set, each eval item is traced under a per-suite session, and the metrics
+that the run already computes — deterministic checks (`eval-correct`, `eval-valid-sql`,
+`eval-recovered`, `eval-tool-calls`) and the LLM-judge axes (`eval-guardrails-passed`,
+`judge-brand-voice`, `judge-coherence`) — are attached to that trace as Langfuse *scores* (the
+skill's "capture as scores" best practice). Unlike `--langsmith`, this needs no extra runs: it
+piggybacks on the graph invocations the eval already makes. A no-op when Langfuse isn't configured.
 """
 
 from __future__ import annotations
@@ -39,7 +47,13 @@ from nora.analytics.graph import build_analytics_graph  # noqa: E402
 from nora.config import get_settings  # noqa: E402
 from nora.marketing.graph import build_marketing_graph, initial_marketing_state  # noqa: E402
 from nora.marketing.prompts import DEFAULT_BRAND_VOICE  # noqa: E402
-from nora.observability import get_logger, setup_logging  # noqa: E402
+from nora.observability import (  # noqa: E402
+    flush_langfuse,
+    get_langfuse_handler,
+    get_logger,
+    score_trace,
+    setup_logging,
+)
 from nora.schemas import VideoBrief  # noqa: E402
 from nora.services.spice_db import build_spice_db  # noqa: E402
 
@@ -73,6 +87,27 @@ def _provider_key_present(model: str) -> bool:
     return bool(os.getenv(env)) if env else True
 
 
+def _langfuse_config(handler, *, suite: str, item_id: str) -> dict | None:
+    """Run config that routes one eval item's trace to Langfuse, or ``None`` when tracing is off.
+
+    Mirrors `nora.app`: the SDK v3 LangChain handler reads trace attributes off the run config's
+    `metadata` (NOT constructor args). Grouping every item of a suite under one `langfuse_session_id`
+    lets the Sessions view show the whole eval run together; the per-item `langfuse_trace_name` keeps
+    traces findable. Returns ``None`` (so `graph.invoke(inputs, None)` runs untraced) when Langfuse
+    isn't configured, so the offline test harness is unaffected.
+    """
+    if handler is None:
+        return None
+    return {
+        "callbacks": [handler],
+        "metadata": {
+            "langfuse_session_id": f"eval-{suite}",
+            "langfuse_tags": ["nora", "eval", suite],
+            "langfuse_trace_name": f"eval-{suite}-{item_id}",
+        },
+    }
+
+
 # --- analytics suite ------------------------------------------------------------------
 
 
@@ -80,10 +115,12 @@ def run_analytics_suite(*, settings=None, model=None, dataset_path: Path = ANALY
     settings = settings or get_settings()
     spice_db = build_spice_db(settings)
     graph = build_analytics_graph(settings=settings, model=model)  # questions carry their own definitions
+    handler = get_langfuse_handler()  # auto-on; None (and untraced) when Langfuse isn't configured
 
     items = []
     for row in _load_jsonl(dataset_path):
-        result = graph.invoke({"messages": [HumanMessage(content=row["question"])]})
+        config = _langfuse_config(handler, suite="analytics", item_id=row["id"])
+        result = graph.invoke({"messages": [HumanMessage(content=row["question"])]}, config)
         answer = result["messages"][-1].content or ""
         reference = compute_reference_answer(spice_db, row["reference_sql"], row["answer_type"])
         record = {
@@ -98,6 +135,14 @@ def run_analytics_suite(*, settings=None, model=None, dataset_path: Path = ANALY
         }
         log.info("eval.scored", suite="analytics", id=record["id"], correct=record["correct"])
         items.append(record)
+
+        if handler is not None:  # attach the deterministic metrics as scores on this item's trace
+            trace_id = handler.last_trace_id
+            score_trace(trace_id, "eval-correct", int(record["correct"]), data_type="BOOLEAN")
+            score_trace(trace_id, "eval-valid-sql", int(record["valid_sql"]), data_type="BOOLEAN")
+            if record["expects_recovery"]:  # only meaningful for the self-correction items
+                score_trace(trace_id, "eval-recovered", int(record["recovered"]), data_type="BOOLEAN")
+            score_trace(trace_id, "eval-tool-calls", float(record["tool_calls"]), data_type="NUMERIC")
 
     recovery_items = [i for i in items if i["expects_recovery"]]
     metrics = {
@@ -124,10 +169,12 @@ def run_marketing_suite(
     graph = build_marketing_graph(
         settings=settings, model=model, spice_db=spice_db, auto_approve=True
     )
+    handler = get_langfuse_handler()  # auto-on; None (and untraced) when Langfuse isn't configured
 
     items = []
     for row in _load_jsonl(dataset_path):
-        result = graph.invoke(initial_marketing_state(row["request"], row["product_name"]))
+        config = _langfuse_config(handler, suite="marketing", item_id=row["id"])
+        result = graph.invoke(initial_marketing_state(row["request"], row["product_name"]), config)
         brief = VideoBrief(**result["brief"])  # state stores a dict; rehydrate for the evaluators
         passed, failures = check_guardrails(brief, spice_db)
         score = judge_brief(brief, DEFAULT_BRAND_VOICE, judge_model) if judge_model else None
@@ -145,6 +192,18 @@ def run_marketing_suite(
             judge=(score.brand_voice + score.coherence) / 2 if score else None,
         )
         items.append(record)
+
+        if handler is not None:  # guardrail verdict + LLM-judge axes as scores on this item's trace
+            trace_id = handler.last_trace_id
+            score_trace(
+                trace_id, "eval-guardrails-passed", int(passed), data_type="BOOLEAN",
+                comment=", ".join(failures) if failures else None,
+            )
+            if score is not None:  # the judge's one-line rationale rides along as the score comment
+                score_trace(trace_id, "judge-brand-voice", float(score.brand_voice),
+                            data_type="NUMERIC", comment=score.justification)
+                score_trace(trace_id, "judge-coherence", float(score.coherence),
+                            data_type="NUMERIC", comment=score.justification)
 
     judged = [i["judge"] for i in items if i["judge"]]
     metrics = {
@@ -268,12 +327,17 @@ def main(argv: list[str] | None = None) -> int:
     judge_model = init_chat_model(settings.model, temperature=0)
 
     results: dict = {}
-    if args.suite in ("analytics", "all"):
-        results["analytics"] = run_analytics_suite(settings=settings, model=analytics_model)
-    if args.suite in ("marketing", "all"):
-        results["marketing"] = run_marketing_suite(
-            settings=settings, model=marketing_model, judge_model=judge_model
-        )
+    try:
+        if args.suite in ("analytics", "all"):
+            results["analytics"] = run_analytics_suite(settings=settings, model=analytics_model)
+        if args.suite in ("marketing", "all"):
+            results["marketing"] = run_marketing_suite(
+                settings=settings, model=marketing_model, judge_model=judge_model
+            )
+    finally:
+        # The Langfuse SDK batches events/scores in the background; flush before this short-lived
+        # process exits or the traces may never be sent. A no-op when Langfuse isn't configured.
+        flush_langfuse()
     print_report(results)
 
     if args.langsmith and args.suite in ("analytics", "all"):

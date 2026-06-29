@@ -254,7 +254,15 @@ point traces the whole orchestrator via the `config` pass-through) and flushes b
 the stack with `docker-compose.langfuse.yml` (UI on :3001). The **full web app** traces via
 Aegra's OpenTelemetry instrumentation — set `OTEL_TARGETS=LANGFUSE` + `LANGFUSE_BASE_URL` (or any
 OTLP backend) and runs group by thread in the Sessions view; `LANGSMITH_TRACING=true` still works
-at the LangChain level.
+at the LangChain level. The **eval runner** (`evals/run_evals.py`) traces the same way *auto-on*
+(no flag): when `LANGFUSE_PUBLIC_KEY` is set, each item is traced under a per-suite session and the
+metrics it already computes are attached to that trace as Langfuse **scores** via
+`score_trace()` — deterministic checks (`eval-correct`, `eval-valid-sql`, `eval-recovered`,
+`eval-tool-calls`) and the LLM-judge axes (`eval-guardrails-passed`, `judge-brand-voice`,
+`judge-coherence`, the judge's rationale riding as the score `comment`). This is the skill's
+"capture as scores" best practice; like the gen-UI pushes, score creation is best-effort (a tracing
+failure never breaks a run). It piggybacks on the eval's own graph runs, so — unlike the separate
+`--langsmith` dataset+`evaluate` push — it adds no extra LLM calls.
 
 **Running the whole app.** The root `docker-compose.yml` builds + runs the stack (Postgres + the
 `aegra` (Aegra `serve`) backend + one-shot Store `seed` + the `ops-api` operations service + Next.js

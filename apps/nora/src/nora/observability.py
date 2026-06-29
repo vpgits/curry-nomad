@@ -158,3 +158,38 @@ def flush_langfuse() -> None:
     except ImportError:
         return
     get_client().flush()
+
+
+def score_trace(
+    trace_id: str | None,
+    name: str,
+    value: float | int | str,
+    *,
+    data_type: str = "NUMERIC",
+    comment: str | None = None,
+) -> None:
+    """Attach one Langfuse *score* to a trace by id. A no-op unless Langfuse is configured.
+
+    This is the skill's "capture as scores" best practice: an eval result (a deterministic
+    correctness check, or an LLM-judge axis) is recorded on the trace it scores, so the Langfuse
+    UI can filter/aggregate by quality. The eval runner reads ``handler.last_trace_id`` after each
+    item's run and pushes the per-item metrics through here.
+
+    Mirrors `get_langfuse_handler` / `flush_langfuse`: gated on ``LANGFUSE_PUBLIC_KEY`` and the
+    optional `langfuse` extra (lazy import), so the base install and the offline tests never need
+    it. Per the skill, ``data_type`` is set explicitly — a boolean ``1`` would otherwise be inferred
+    as NUMERIC. Score creation is *best-effort*: a tracing hiccup must never break an eval run, so a
+    failure is logged and swallowed (the same posture as the gen-UI pushes).
+    """
+    if not trace_id or not os.environ.get("LANGFUSE_PUBLIC_KEY"):
+        return  # not configured, or no trace to attach to — stay a no-op
+    try:
+        from langfuse import get_client  # lazy: needs the optional extra
+    except ImportError:
+        return
+    try:
+        get_client().create_score(
+            trace_id=trace_id, name=name, value=value, data_type=data_type, comment=comment
+        )
+    except Exception:  # noqa: BLE001 — tracing is best-effort; never fail the run over a score
+        get_logger(__name__).warning("langfuse.score_failed", score=name, trace_id=trace_id)

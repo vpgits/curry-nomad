@@ -129,6 +129,48 @@ def test_run_analytics_suite_offline(tmp_path):
     assert out["items"][0]["correct"]
 
 
+def test_analytics_suite_pushes_langfuse_scores(tmp_path, monkeypatch):
+    """When a Langfuse handler is active, the suite attaches the deterministic metrics as scores.
+
+    Fully offline: both the handler and `score_trace` are faked, so no `langfuse` package or server
+    is touched — this pins the runner's auto-on scoring wiring (trace id + score names + data types).
+    """
+    import evals.run_evals as run_evals
+
+    dataset = tmp_path / "a.jsonl"
+    dataset.write_text(
+        json.dumps(
+            {"id": "t1", "question": "Top product?", "reference_sql": _A01_SQL,
+             "answer_type": "text", "expects_recovery": False}
+        )
+        + "\n"
+    )
+    model = ScriptedChatModel(
+        [ai_tool_call("run_sql", {"query": _A01_SQL}, "1"), ai_final("It's Ceylon Cinnamon (Alba).")]
+    )
+
+    from langchain_core.callbacks import BaseCallbackHandler
+
+    class _FakeHandler(BaseCallbackHandler):  # a valid no-op callback, so attaching it is harmless
+        last_trace_id = "trace-xyz"
+
+    pushed: list[tuple] = []
+    monkeypatch.setattr(run_evals, "get_langfuse_handler", lambda: _FakeHandler())
+    monkeypatch.setattr(
+        run_evals,
+        "score_trace",
+        lambda trace_id, name, value, **kw: pushed.append((trace_id, name, value, kw.get("data_type"))),
+    )
+
+    run_evals.run_analytics_suite(model=model, dataset_path=dataset)
+
+    assert {name for _, name, _, _ in pushed} == {"eval-correct", "eval-valid-sql", "eval-tool-calls"}
+    assert all(trace_id == "trace-xyz" for trace_id, *_ in pushed)
+    by_name = {name: (value, dtype) for _, name, value, dtype in pushed}
+    assert by_name["eval-correct"] == (1, "BOOLEAN")  # bool coerced to int for the BOOLEAN score
+    assert by_name["eval-tool-calls"] == (1.0, "NUMERIC")
+
+
 def test_run_analytics_suite_measures_recovery(tmp_path):
     dataset = tmp_path / "rec.jsonl"
     dataset.write_text(
