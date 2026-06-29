@@ -24,7 +24,6 @@ from nora.schemas import (
     AnalyticsDashboard,
     ChartPoint,
     DashboardChart,
-    RouteDecision,
     VideoBrief,
 )
 from nora.services.renderer import OpenRouterRenderer
@@ -33,6 +32,7 @@ from tests.fakes import (
     ScriptedChatModel,
     ScriptedStructuredModel,
     ai_final,
+    ai_tool_call,
 )
 from tests.test_marketing_graph import _passing_model
 
@@ -82,16 +82,16 @@ def test_auto_choose_default_keeps_a_single_script_gate():
     assert payload["kind"] == "script_review"
 
 
-class _MarketingRouter:
-    """Always routes to marketing for Cloves (no real router model)."""
-
-    def with_structured_output(self, schema, **kwargs):  # noqa: ARG002
-        return self
-
-    def invoke(self, messages, **kwargs):  # noqa: ARG002
-        from nora.schemas import RouteDecision
-
-        return RouteDecision(capability="marketing", reason="t", product_hint="Cloves")
+def _marketing_supervisor():
+    """A supervisor that delegates a Cloves video ad, then ends silently when marketing returns."""
+    return ScriptedChatModel(
+        [
+            ai_tool_call(
+                "to_marketing", {"task": "make an ad for Cloves", "product_hint": "Cloves"}, "h1"
+            ),
+            ai_final(""),
+        ]
+    )
 
 
 def _stub_analytics(*args, **kwargs):  # noqa: ARG001
@@ -102,7 +102,7 @@ def test_orchestrator_chains_concept_then_script_gates():
     """The live /ask marketing path: with auto_choose=False the orchestrator now pauses TWICE —
     first at the concept pick, then at the script review — and resumes both on one thread."""
     orch = build_orchestrator(
-        router_model=_MarketingRouter(),
+        supervisor_model=_marketing_supervisor(),
         analytics_graph=_stub_analytics,
         marketing_graph=build_marketing_graph(
             model=_passing_model(), auto_approve=False, auto_choose=False
@@ -129,7 +129,7 @@ def test_marketing_render_card_carries_video_jobs(tmp_path):
     card carrying the hero image, per-shot stills, and the video job ids the UI polls."""
     settings = Settings(media_dir=tmp_path)
     orch = build_orchestrator(
-        router_model=_MarketingRouter(),
+        supervisor_model=_marketing_supervisor(),
         analytics_graph=_stub_analytics,
         marketing_graph=build_marketing_graph(
             model=_passing_model(),
@@ -210,59 +210,6 @@ def test_a2ui_studio_pushes_an_authored_surface_on_the_ui_channel():
     assert blocks[1]["chart_kind"] == "bar"
 
 
-# --- routing: the delivery-map capability ---------------------------------------------
-
-_CANNED_PLAN = {
-    "route_id": 7,
-    "vehicle": "van-1",
-    "status": "planned",
-    "total_km": 41.2,
-    "naive_km": 58.6,
-    "est_minutes": 96.0,
-    "improvement_pct": 29.7,
-    "ordered_stops": [
-        {"seq": 1, "delivery_id": 1, "order_id": 10, "address": "1 A St", "city": "Colombo", "lat": 6.93, "lng": 79.85},
-        {"seq": 2, "delivery_id": 2, "order_id": 11, "address": "2 B St", "city": "Dehiwala", "lat": 6.85, "lng": 79.87},
-    ],
-}
-
-
-def _routing_orch(route_planner):
-    """Orchestrator wired to route to the new `routing` capability, with an injected planner (no
-    HTTP) and stub analytics/marketing so no provider key is needed."""
-    return build_orchestrator(
-        router_model=ScriptedStructuredModel(
-            {RouteDecision: [RouteDecision(capability="routing", reason="plan route")]}
-        ),
-        analytics_graph=_stub_analytics,
-        marketing_graph=build_marketing_graph(model=_passing_model(), auto_approve=True),
-        route_planner=route_planner,
-        checkpointer=InMemorySaver(),
-    )
-
-
-def test_routing_capability_pushes_a_route_map_card():
-    orch = _routing_orch(lambda: _CANNED_PLAN)
-    result = orch.invoke(
-        {"messages": [HumanMessage("plan today's delivery route")]},
-        {"configurable": {"thread_id": "route-1"}},
-    )
-    assert result["route"]["capability"] == "routing"
-    card = next((u for u in result.get("ui", []) if u.get("name") == "route_map"), None)
-    assert card is not None  # the generative-UI map card
-    assert len(card["props"]["ordered_stops"]) == 2
-    assert "41.2 km" in result["messages"][-1].content  # the optimized distance in the summary
-
-
-def test_routing_degrades_when_ops_api_unreachable():
-    """Best-effort: a planner failure (ops API down) replies in text, no crash, no card."""
-
-    def boom():
-        raise RuntimeError("connection refused")
-
-    result = _routing_orch(boom).invoke(
-        {"messages": [HumanMessage("plan the delivery route")]},
-        {"configurable": {"thread_id": "route-2"}},
-    )
-    assert not [u for u in result.get("ui", []) if u.get("name") == "route_map"]
-    assert "couldn't reach" in result["messages"][-1].content.lower()
+# Note: route planning is no longer a chat capability — it lives on the ops REST API + the /routes
+# page (its `route_map` card is rendered there directly, not pushed by the orchestrator). The
+# deterministic optimizer itself is covered by test_operations_routing.py.

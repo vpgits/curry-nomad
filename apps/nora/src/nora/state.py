@@ -47,11 +47,13 @@ class OrchestratorState(MessagesState):
     """Top-level router state.
 
     Extends `MessagesState`, which contributes the `messages` channel and its `add_messages`
-    reducer — the chat history the `nora` graph serves to the useStream client. `route` and `ui`
+    reducer — the chat history the `nora` graph serves to the useStream client. `handoff` and `ui`
     are our own additions; both are JSON-native (a dict and a list of dicts), so checkpoints still
     survive strict msgpack (see the module docstring)."""
 
-    route: NotRequired[dict]  # RouteDecision.model_dump()
+    # The supervisor's latest delegation: {"target": "marketing", "task": ..., "product_hint": ...}.
+    # A capability node reads it for the task/hint the supervisor handed it (e.g. marketing).
+    handoff: NotRequired[dict]
     # Generative-UI channel: the analytics node push_ui_message()-es a dashboard here, which the
     # useStream UI renders via LoadExternalComponent. (UIMessage is a plain dict — msgpack-safe.)
     ui: Annotated[Sequence[AnyUIMessage], ui_message_reducer]

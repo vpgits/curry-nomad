@@ -44,20 +44,29 @@ class PlaceholderRenderer:
 
 
 class OpenRouterRenderer:
-    """Real media renderer over OpenRouter. The client is injectable so tests run fully offline."""
+    """Real media renderer over OpenRouter. The client is injectable so tests run fully offline.
+
+    Construction is **lazy**: it never builds the HTTP client (or requires a key) up front, so the
+    marketing graph can be built — and non-rendering turns can run — without an OPENROUTER_API_KEY.
+    The key is required only when `render()` actually runs (it raises loudly there if missing); the
+    marketing render node catches that and records it as an error result, so the brief still ships."""
 
     def __init__(self, settings: Settings, *, client: OpenRouterClient | None = None):
         self.settings = settings
-        if client is None:
-            if not settings.openrouter_api_key:
+        self._client = client  # None → built on first render() from the key (raises there if missing)
+
+    @property
+    def client(self) -> OpenRouterClient:
+        if self._client is None:
+            if not self.settings.openrouter_api_key:
                 raise ValueError(
-                    "OpenRouterRenderer needs an OPENROUTER_API_KEY (or an injected client). "
-                    "Set NORA_RENDERER=placeholder to run offline."
+                    "OpenRouterRenderer needs an OPENROUTER_API_KEY (or an injected client) to "
+                    "render media. Set NORA_RENDERER=placeholder to run without rendering."
                 )
-            client = HttpOpenRouterClient(
-                api_key=settings.openrouter_api_key, base_url=settings.openrouter_base_url
+            self._client = HttpOpenRouterClient(
+                api_key=self.settings.openrouter_api_key, base_url=self.settings.openrouter_base_url
             )
-        self.client = client
+        return self._client
 
     def _hero_prompt(self, brief: VideoBrief) -> str:
         return (
@@ -67,6 +76,10 @@ class OpenRouterRenderer:
 
     def render(self, brief: VideoBrief) -> dict:
         s = self.settings
+        # Resolve the client up front so a missing key fails LOUDLY here (propagates out of render),
+        # rather than being swallowed by the per-asset best-effort try/excepts below. The marketing
+        # render node catches this and records an error result, so the brief still ships.
+        client = self.client
         media_dir = Path(s.media_dir)
         render_id = uuid.uuid4().hex[:12]
         out_dir = media_dir / render_id
@@ -79,7 +92,7 @@ class OpenRouterRenderer:
         def save_image(name: str, prompt: str) -> str | None:
             """Generate + persist one image; return its served (relative) /media path, or None."""
             try:
-                data = self.client.generate_image(
+                data = client.generate_image(
                     model=s.openrouter_image_model, prompt=prompt, aspect_ratio=s.render_aspect_ratio
                 )
             except Exception as exc:  # noqa: BLE001 — per-asset best-effort; one failure ≠ whole render
@@ -103,7 +116,7 @@ class OpenRouterRenderer:
             job_id: str | None = None
             err: str | None = None
             try:
-                job = self.client.submit_video(
+                job = client.submit_video(
                     model=s.openrouter_video_model,
                     prompt=t2v,
                     first_frame_url=first_frame,

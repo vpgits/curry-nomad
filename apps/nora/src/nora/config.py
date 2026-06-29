@@ -71,11 +71,13 @@ class Settings(BaseSettings):
     # --- Google Workspace capability (optional; OFF by default) ---
     # The `workspace` capability is an agent that acts on the logged-in operator's own Google account
     # (Gmail/Calendar) through the self-hosted Google Workspace MCP server. It's gated OFF so the base
-    # install stays dependency-light (no langchain-mcp-adapters) and the offline suite/teaching paths
-    # are untouched; turn it on with NORA_WORKSPACE_ENABLED=true (and run `uv sync --extra workspace`).
+    # First-party: ON by default (`langchain-mcp-adapters` is a base dependency now). Acting on the
+    # operator's Google account still needs a running Workspace MCP server + the per-run OAuth token;
+    # without a token the capability degrades to a friendly "connect" reply (never a crash). Turn it
+    # OFF with NORA_WORKSPACE_ENABLED=false (the offline test suite pins it off — see tests/conftest.py).
     # Secrets (Google OAuth client id/secret, NEXTAUTH_SECRET) are NOT Settings fields — they're read
     # from the environment by the web layer + the Aegra auth handler, like every other provider key.
-    workspace_enabled: bool = False  # master flag (NORA_WORKSPACE_ENABLED)
+    workspace_enabled: bool = True  # master flag (NORA_WORKSPACE_ENABLED)
     # The MCP server's streamable-http endpoint — note the `/mcp` path (the bare host returns 405).
     workspace_mcp_url: str = "http://localhost:8001/mcp"
     # Informational echo of the scopes the demo grants; the real enforcement is the MCP server's
@@ -91,9 +93,12 @@ class Settings(BaseSettings):
     marketing_num_concepts: int = 3  # parallel ideation count
 
     # --- Rendering adapter ---
-    # Placeholder by default (no external calls, no spend). Switch to the real OpenRouter renderer
-    # with NORA_RENDERER=openrouter + an OPENROUTER_API_KEY. Every model/knob below is overridable.
-    renderer: Literal["placeholder", "openrouter"] = "placeholder"
+    # First-party: the real OpenRouter renderer by default. It needs an OPENROUTER_API_KEY to actually
+    # render — without one, a marketing turn's render step fails loudly and is recorded as an error
+    # (the brief still ships; construction is lazy, so non-rendering turns don't need the key). Set
+    # NORA_RENDERER=placeholder for no external calls / no spend (the offline suite pins this — see
+    # tests/conftest.py). Every model/knob below is overridable.
+    renderer: Literal["placeholder", "openrouter"] = "openrouter"
     openrouter_api_key: str | None = None  # OPENROUTER_API_KEY; only used by the openrouter renderer
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     # Cheapest-tier defaults (see the OpenRouter model lists). Image gen is synchronous; video is an

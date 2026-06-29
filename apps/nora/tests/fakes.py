@@ -46,6 +46,11 @@ class ScriptedChatModel:
         self._i += 1
         return msg
 
+    async def ainvoke(self, messages, config=None, **kwargs):
+        """Async parity for nodes driven on the async path (e.g. the workspace agent loop, whose
+        MCP tools are async-only). Just defers to the scripted `invoke`."""
+        return self.invoke(messages, config, **kwargs)
+
 
 class _StructuredRunnable:
     """What `.with_structured_output(Schema)` returns: `.invoke(...)` pops the next scripted

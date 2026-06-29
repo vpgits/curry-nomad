@@ -6,13 +6,15 @@ M1 wires the analytics agent directly. M4 swaps `build_analytics_graph()` for th
 orchestrator and adds the human-review interrupt prompt — the streaming/HITL plumbing in
 `run_turn` is already written generically so that swap is a one-liner.
 
-Streaming uses the stable `graph.stream(stream_mode=...)` API so the live demo runs
-predictably. (The experimental v3 typed stream — `graph.stream_events(..., version="v3")`
-with `.messages` / `.interrupts` / `.output` — is the alternative noted in the specs.)
+Streaming uses the async `graph.astream(stream_mode=...)` API: the orchestrator runs async so the
+workspace agent's coroutine-only MCP tools work without an `asyncio.run` bridge (sync nodes still
+run fine, in a worker thread). (The experimental v3 typed stream — `graph.astream_events(...,
+version="v3")` — is the alternative noted in the specs.)
 """
 
 from __future__ import annotations
 
+import asyncio
 import sys
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -48,7 +50,7 @@ def _print_message(msg) -> None:
         print(f"  ↳ tool result: {preview}")
 
 
-def run_turn(graph, text: str, thread_id: str = THREAD_ID) -> dict:
+async def run_turn(graph, text: str, thread_id: str = THREAD_ID) -> dict:
     """Stream one turn through the graph, printing progress. Resumes from any HITL interrupt
     by prompting the operator. Returns the final state."""
     config = {"configurable": {"thread_id": thread_id}}
@@ -71,13 +73,15 @@ def run_turn(graph, text: str, thread_id: str = THREAD_ID) -> dict:
     inputs: dict | Command = {"messages": [HumanMessage(content=text)]}
 
     while True:
-        for _node, update in graph.stream(inputs, config, stream_mode="updates"):
-            if not isinstance(update, dict):
-                continue
-            for msg in update.get("messages", []):
-                _print_message(msg)
+        async for chunk in graph.astream(inputs, config, stream_mode="updates"):
+            # stream_mode="updates" yields {node_name: node_update} per superstep — print the
+            # messages from each node's update.
+            for update in chunk.values():
+                if isinstance(update, dict):
+                    for msg in update.get("messages", []):
+                        _print_message(msg)
 
-        state = graph.get_state(config)
+        state = await graph.aget_state(config)
         if not state.interrupts:
             return state.values
 
@@ -120,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
     user_input = " ".join(argv)
     print(f"You: {user_input}")
     try:
-        run_turn(graph, user_input)
+        asyncio.run(run_turn(graph, user_input))
     finally:
         # The Langfuse SDK batches events in the background; flush before this short-lived
         # process exits or the trace may never be sent. No-op when Langfuse isn't configured.

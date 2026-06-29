@@ -419,10 +419,12 @@ source = { editable = "." }
 dependencies = [
     { name = "httpx" },
     { name = "langchain" },
+    { name = "langchain-mcp-adapters" },
     { name = "langchain-openai" },
     { name = "langgraph" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pyjwt" },
     { name = "structlog" },
     { name = "tenacity" },
 ]
@@ -445,10 +447,6 @@ operations = [
     { name = "httpx" },
     { name = "uvicorn" },
 ]
-workspace = [
-    { name = "langchain-mcp-adapters" },
-    { name = "pyjwt" },
-]
 
 [package.dev-dependencies]
 dev = [
@@ -465,13 +463,13 @@ requires-dist = [
     { name = "httpx", marker = "extra == 'operations'", specifier = ">=0.27" },
     { name = "langchain", specifier = ">=1.0,<2.0" },
     { name = "langchain-anthropic", marker = "extra == 'anthropic'", specifier = ">=0.3" },
-    { name = "langchain-mcp-adapters", marker = "extra == 'workspace'", specifier = ">=0.3.0" },
+    { name = "langchain-mcp-adapters", specifier = ">=0.3.0" },
     { name = "langchain-openai", specifier = ">=0.3" },
     { name = "langfuse", marker = "extra == 'langfuse'", specifier = ">=3" },
     { name = "langgraph", specifier = ">=1.0,<2.0" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.3" },
-    { name = "pyjwt", marker = "extra == 'workspace'", specifier = ">=2.9" },
+    { name = "pyjwt", specifier = ">=2.9" },
     { name = "structlog", specifier = ">=24.1" },
     { name = "tenacity", specifier = ">=8.3" },
     { name = "uvicorn", marker = "extra == 'operations'", specifier = ">=0.30" },

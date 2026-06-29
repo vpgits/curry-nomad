@@ -6,12 +6,24 @@ so DB-backed tests run against real (but disposable) data without touching the c
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
-import pytest
+# The offline suite has no provider keys and no MCP server. The SHIPPED defaults are now first-party
+# (renderer=openrouter, workspace ON), so pin them to their offline-safe modes for the whole suite —
+# tests that exercise rendering/workspace inject fakes; everything else stays placeholder +
+# workspace-off (so the default orchestrator's workspace node is the sync connect-stub). setdefault
+# so an explicit env still wins. Must run before the first get_settings().
+os.environ.setdefault("NORA_RENDERER", "placeholder")
+os.environ.setdefault("NORA_WORKSPACE_ENABLED", "false")
 
-from nora.data import seed
-from nora.services.spice_db import SqliteSpiceDB
+import pytest  # noqa: E402 — imported after the env pins above
+
+from nora.config import get_settings  # noqa: E402
+from nora.data import seed  # noqa: E402
+from nora.services.spice_db import SqliteSpiceDB  # noqa: E402
+
+get_settings.cache_clear()  # drop any cached settings so the env pins above take effect
 
 
 @pytest.fixture(scope="session")

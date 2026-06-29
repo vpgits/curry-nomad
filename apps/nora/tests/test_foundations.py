@@ -34,9 +34,12 @@ def test_settings_defaults():
     assert s.model.startswith("openai:")
     assert s.router_model.startswith("openai:")
     assert s.data_as_of.isoformat() == "2026-06-30"
-    assert s.renderer == "placeholder"
     assert s.db_path.name == "curry_nomad.db"
     assert s.embedding_dims == 1536
+    # The offline suite pins renderer/workspace off (conftest), so check the SHIPPED field defaults
+    # directly (env-independent): both capabilities are first-party now.
+    assert Settings.model_fields["renderer"].default == "openrouter"
+    assert Settings.model_fields["workspace_enabled"].default is True
 
 
 def test_logging_emits_structured_json(capsys):
@@ -49,7 +52,9 @@ def test_logging_emits_structured_json(capsys):
     assert record["level"] == "info"
 
 
-def test_default_renderer_is_placeholder():
+def test_offline_suite_pins_placeholder_renderer():
+    # The shipped default is the OpenRouter renderer; the offline suite pins NORA_RENDERER=placeholder
+    # (conftest) so no test makes a real external call without explicitly injecting a client.
     assert isinstance(get_renderer(get_settings()), PlaceholderRenderer)
 
 
@@ -89,6 +94,8 @@ def test_openrouter_renderer_image_to_video_when_public_base_set(tmp_path):
 
 
 def test_openrouter_renderer_needs_a_key_or_client():
-    # Without an injected client and without a key, construction fails fast (rather than at call time).
+    # Hard-require, but lazy: construction is cheap (so building the marketing graph / running a
+    # non-rendering turn needs no key); RENDERING without a key/client fails loudly.
+    renderer = OpenRouterRenderer(Settings(openrouter_api_key=None))  # no raise at construction
     with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):
-        OpenRouterRenderer(Settings(openrouter_api_key=None))
+        renderer.render(_brief())

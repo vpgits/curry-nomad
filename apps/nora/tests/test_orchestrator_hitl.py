@@ -25,18 +25,8 @@ from langgraph.types import Command
 from nora.marketing.graph import build_marketing_graph
 from nora.memory import build_checkpointer
 from nora.orchestrator import build_orchestrator
-from nora.schemas import RouteDecision
+from tests.fakes import ScriptedChatModel, ai_final, ai_tool_call
 from tests.test_marketing_graph import _passing_model
-
-
-class _FakeRouter:
-    """Always routes to marketing (avoids a real router model)."""
-
-    def with_structured_output(self, schema, **kwargs):  # noqa: ARG002
-        return self
-
-    def invoke(self, messages, **kwargs):  # noqa: ARG002
-        return RouteDecision(capability="marketing", reason="test", product_hint="Cloves")
 
 
 class _StubAnalytics:
@@ -49,7 +39,17 @@ class _StubAnalytics:
 
 def _orchestrator(checkpointer):
     return build_orchestrator(
-        router_model=_FakeRouter(),
+        # The supervisor delegates to marketing for Cloves, then ends silently when it returns.
+        supervisor_model=ScriptedChatModel(
+            [
+                ai_tool_call(
+                    "to_marketing",
+                    {"task": "make a video ad for Cloves", "product_hint": "Cloves"},
+                    "h1",
+                ),
+                ai_final(""),
+            ]
+        ),
         analytics_graph=_StubAnalytics(),
         marketing_graph=build_marketing_graph(model=_passing_model(), auto_approve=False),
         checkpointer=checkpointer,

@@ -21,6 +21,13 @@ dependencies = [
     # render the route_map card; httpx is the client (small, and already a transitive dep via the
     # openrouter/operations extras).
     "httpx>=0.27",
+    # The workspace capability is first-party (ON by default): an agent that acts on the operator's
+    # own Google account via the self-hosted Workspace MCP server. `langchain-mcp-adapters` builds the
+    # per-run MCP client; `pyjwt` lets the Aegra custom-auth handler (auth.py) verify the NextAuth
+    # session JWT for per-operator thread identity. (The flag-off path still never imports the MCP
+    # adapter — the import stays lazy in workspace/graph.py, so turning it off keeps startup light.)
+    "langchain-mcp-adapters>=0.3.0",  # >=0.3.0: tools honor handle_tool_errors (see workspace/graph.py)
+    "pyjwt>=2.9",
 ]
 
 [project.optional-dependencies]
@@ -45,16 +52,11 @@ operations = [
 aegra = [
     "aegra-cli>=0.9.22",
 ]
-# The optional `workspace` capability (M-Workspace): an agent that acts on the operator's own Google
-# account (Gmail/Calendar) through the self-hosted Google Workspace MCP server. OFF by default
-# (NORA_WORKSPACE_ENABLED); enable with `uv sync --extra workspace`. `langchain-mcp-adapters` builds
-# the per-run MCP client; `pyjwt` lets the Aegra custom-auth handler (auth.py) verify the
-# NextAuth-minted session JWT. Kept an extra so the base install + offline suite stay
-# dependency-light (the flag-off path never imports either).
-workspace = [
-    "langchain-mcp-adapters>=0.3.0",  # >=0.3.0: tools honor handle_tool_errors (see workspace/graph.py)
-    "pyjwt>=2.9",
-]
+# The `workspace` capability (M-Workspace) is first-party now — an agent that acts on the operator's
+# own Google account (Gmail/Calendar) through the self-hosted Google Workspace MCP server, ON by
+# default. Its deps (`langchain-mcp-adapters`, `pyjwt`) moved into the base `dependencies` above, so
+# this extra is kept only as a no-op alias for the documented `uv sync --extra workspace` command.
+workspace = []
 
 [project.scripts]
 # Build the writable operations DB (deterministic; safe to re-run). Needs no provider key.

@@ -1,4 +1,4 @@
-"""The workspace agent loop (hand-built, mirroring the analytics agent).
+"""The workspace agent loop (hand-built, mirroring the analytics agent) — now async.
 
     START → llm → should_continue → (tools | END)
     tools → llm                                  # loop back
@@ -6,12 +6,16 @@
 Same shape as `analytics/graph.py`, with one deliberate twist: the tool set is **built per run
 from the operator's MCP client** (whose bearer token is *this operator's* Google OAuth access
 token), not bound once at compile time. So instead of compiling a static subgraph, we expose a
-`build_workspace_agent(...)` that returns a callable; each call binds the per-run tools, compiles a
-one-shot loop, and runs it.
+`build_workspace_agent(...)` that returns an async callable; each call binds the per-run tools,
+compiles a one-shot loop, and runs it.
 
-Why a fresh connection per run: `langchain-mcp-adapters` can't swap a per-request bearer on a
-long-lived client, so we mint a new per-run connection each turn with
-`headers={"Authorization": "Bearer …"}`.
+Why a fresh connection per run: `langchain-mcp-adapters` mints a stateless session per tool call,
+so we open a new per-run connection carrying THIS operator's bearer in `headers`.
+
+The loop runs **async** (`await agent.ainvoke(...)`): MCP tools are coroutine-only (a sync
+`.invoke()` raises "StructuredTool does not support sync invocation"), and the orchestrator now
+drives the whole graph async (`astream`/`ainvoke`), so the workspace node simply `await`s — no
+`asyncio.run` bridge any more (that only existed when the node was sync).
 
 The default tools provider — the only place `langchain_mcp_adapters` is imported — is created lazily
 and imported lazily, so the base install never pulls the optional dependency and the offline test
@@ -20,7 +24,7 @@ suite stays green (the capability is OFF by default; tests inject a fake provide
 
 from __future__ import annotations
 
-import asyncio
+import inspect
 from collections.abc import Callable, Sequence
 
 from langchain.chat_models import init_chat_model
@@ -38,7 +42,8 @@ log = get_logger(__name__)
 
 # A callable that mints the operator's Google Workspace tools for one run, given their access token.
 # Injectable (the analogue of routing's `route_planner`) so offline tests pass a fake — no MCP server,
-# no network. The default implementation builds a per-run MultiServerMCPClient (see below).
+# no network. May be sync OR async (the runner awaits it if it returns a coroutine); the default
+# implementation is async (it awaits `load_mcp_tools`).
 ToolsProvider = Callable[..., Sequence[BaseTool]]
 
 WORKSPACE_SYSTEM_PROMPT = (
@@ -70,7 +75,7 @@ def _make_mcp_tools_provider(settings: Settings) -> ToolsProvider:
     operator's bearer token. This is the ONLY place `langchain_mcp_adapters` is touched, and it's
     imported lazily so the base install (capability OFF) never needs the optional extra."""
 
-    def provider(*, access_token: str) -> Sequence[BaseTool]:
+    async def provider(*, access_token: str) -> Sequence[BaseTool]:
         from langchain_mcp_adapters.tools import load_mcp_tools
 
         # A fresh per-run connection carrying THIS operator's bearer. `session=None` + `connection=`
@@ -83,21 +88,22 @@ def _make_mcp_tools_provider(settings: Settings) -> ToolsProvider:
         # handle_tool_errors=False: make a failed MCP tool call RAISE a ToolException instead of the
         # adapter (its >=0.3.0 default) converting it into a ToolMessage itself — so OUR narrow
         # `handle_workspace_error` in ToolNode stays the demonstrated self-correction mechanism (the
-        # analytics-contrast teaching point). `load_mcp_tools` is async; we're in a sync graph node
-        # off the event loop, so a one-shot `asyncio.run` is safe (same bridge as the loop driver).
-        return asyncio.run(
-            load_mcp_tools(None, connection=connection, handle_tool_errors=False)
-        )
+        # analytics-contrast teaching point). The node is async now, so we await directly.
+        return await load_mcp_tools(None, connection=connection, handle_tool_errors=False)
 
     return provider
 
 
 def _compile_loop(model, tools: Sequence[BaseTool]):
-    """Compile the analytics-style llm↔tools loop for one run's tool set (see module docstring)."""
+    """Compile the analytics-style llm↔tools loop for one run's tool set (see module docstring).
+
+    The llm node is async (`await model.ainvoke`) so the loop runs entirely on the event loop the
+    orchestrator already drives — MCP tools are coroutine-only, so the tools node runs them via the
+    async path too."""
     model_with_tools = model.bind_tools(tools)
 
-    def llm_node(state: AnalyticsState) -> dict:
-        response = model_with_tools.invoke(
+    async def llm_node(state: AnalyticsState) -> dict:
+        response = await model_with_tools.ainvoke(
             [SystemMessage(content=WORKSPACE_SYSTEM_PROMPT), *state["messages"]]
         )
         # Same termination guard as analytics (this loop reuses AnalyticsState's `remaining_steps`):
@@ -131,33 +137,34 @@ def build_workspace_agent(
 ):
     """Build the workspace capability runner.
 
-    Returns a callable `run(messages, *, access_token, config=None) -> list[BaseMessage]` that binds
-    the operator's per-run MCP tools, runs the tool loop, and returns ONLY the new messages (the
-    tool-call steps + final answer) so they merge into the top-level thread and render inline (the
-    model streams, like analytics — its tokens are the answer).
+    Returns an **async** callable `arun(messages, *, access_token, config=None) -> list[BaseMessage]`
+    that binds the operator's per-run MCP tools, runs the tool loop, and returns ONLY the new
+    messages (the tool-call steps + final answer) so they merge into the top-level thread and render
+    inline (the model streams, like analytics — its tokens are the answer).
 
     `model` and `tools_provider` are injectable for offline tests (a `ScriptedChatModel` + a fake
     tool list); by default the model is built from settings (lazily, so building the agent needs no
-    provider key) and the tools come from the real MCP client.
+    provider key) and the tools come from the real (async) MCP client provider.
     """
     settings = settings or get_settings()
     provider = tools_provider or _make_mcp_tools_provider(settings)
     _model = model  # may be None → built lazily on first run (so flag-on build needs no key at import)
 
-    def run(messages: list, *, access_token: str, config=None) -> list[BaseMessage]:
+    async def arun(messages: list, *, access_token: str, config=None) -> list[BaseMessage]:
         nonlocal _model
         if _model is None:
             _model = init_chat_model(settings.model, temperature=0, streaming=True)
+        # The provider may be sync (a test fake returning a list) or async (the real one, which
+        # awaits load_mcp_tools) — await it only if it handed back a coroutine.
         tools = provider(access_token=access_token)
+        if inspect.isawaitable(tools):
+            tools = await tools
         agent = _compile_loop(_model, tools)
-        # MCP tools (langchain-mcp-adapters) are ASYNC-ONLY — a sync `.invoke()` raises "StructuredTool
-        # does not support sync invocation". So drive the loop with `ainvoke`, which executes tools via
-        # their async path. We're in a sync graph node running off the event loop (Aegra runs sync
-        # nodes in a worker thread; the CLI/tests have no running loop), so a one-shot `asyncio.run` is
-        # safe — the same bridge the tools_provider uses for `get_tools()`.
-        result = asyncio.run(agent.ainvoke({"messages": messages}, config))
+        # Drive the loop async: MCP tools are coroutine-only, and the orchestrator is already on the
+        # event loop (Aegra `astream`, the CLI `astream`), so we await directly — no `asyncio.run`.
+        result = await agent.ainvoke({"messages": messages}, config)
         # Return only the tail the agent appended (add_messages keeps input messages at the front by
         # id), so we don't re-emit the operator's prompt into the top-level thread.
         return list(result["messages"][len(messages) :])
 
-    return run
+    return arun

@@ -12,6 +12,7 @@ imported on the flag-off path — asserted below, which is why the whole suite s
 
 from __future__ import annotations
 
+import asyncio
 import sys
 
 from langchain_core.messages import HumanMessage, ToolMessage
@@ -20,9 +21,14 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from nora.config import Settings
 from nora.orchestrator import build_orchestrator
-from nora.schemas import RouteDecision
 from nora.workspace.graph import build_workspace_agent
-from tests.fakes import ScriptedChatModel, ScriptedStructuredModel, ai_final, ai_tool_call
+from tests.fakes import ScriptedChatModel, ai_final, ai_tool_call
+
+
+def _run(graph, *args, **kwargs):
+    """Drive the (now async) orchestrator from a sync test: the workspace node is async, so the
+    graph must be invoked on the async path (`ainvoke`)."""
+    return asyncio.run(graph.ainvoke(*args, **kwargs))
 
 
 def _stub_node(*args, **kwargs):  # noqa: ARG001 — never reached on a workspace-routed turn
@@ -55,9 +61,10 @@ class AsyncOnlyToolsProvider:
     """Like `RecordingToolsProvider`, but its `send_email` is a **coroutine-only** `StructuredTool` —
     a faithful stand-in for a real MCP tool, which `langchain-mcp-adapters` exposes with no sync
     implementation. Calling `.invoke()` on it raises `NotImplementedError: StructuredTool does not
-    support sync invocation` (the production failure), while `.ainvoke()` works. This is what locks in
-    the `asyncio.run(agent.ainvoke(...))` fix: a regression to a sync `agent.invoke(...)` would drive
-    the tool synchronously and break, where the sync `@tool` in `RecordingToolsProvider` would not."""
+    support sync invocation` (the production failure), while `.ainvoke()` works. This locks in the
+    async loop (the orchestrator drives workspace via `await agent.ainvoke(...)`): a regression to a
+    sync `agent.invoke(...)` would drive the tool synchronously and break, where the sync `@tool` in
+    `RecordingToolsProvider` would not."""
 
     def __init__(self):
         self.access_tokens: list[str] = []
@@ -81,14 +88,15 @@ class AsyncOnlyToolsProvider:
 
 
 def _workspace_orch(workspace_agent):
-    """Orchestrator wired to route to `workspace`, with stubbed analytics/marketing (never reached)
-    so no provider key is needed — the workspace analogue of `_routing_orch`."""
+    """Orchestrator wired to delegate to `workspace`, with stubbed analytics/marketing (never
+    reached) so no provider key is needed."""
     return build_orchestrator(
         # Pin workspace_enabled=False (an explicit kwarg overrides any local .env) so the flag-off
         # default-build path is deterministic regardless of the developer's NORA_WORKSPACE_ENABLED.
         settings=Settings(workspace_enabled=False),
-        router_model=ScriptedStructuredModel(
-            {RouteDecision: [RouteDecision(capability="workspace", reason="email")]}
+        # The supervisor delegates to workspace, then ends silently when it returns.
+        supervisor_model=ScriptedChatModel(
+            [ai_tool_call("to_workspace", {"task": "send an email"}, "h1"), ai_final("")]
         ),
         analytics_graph=_stub_node,
         marketing_graph=_stub_node,
@@ -114,12 +122,11 @@ def test_workspace_runs_the_tool_loop_with_the_operator_token():
     agent = build_workspace_agent(model=model, tools_provider=provider)
     orch = _workspace_orch(agent)
 
-    result = orch.invoke(
+    result = _run(orch,
         {"messages": [HumanMessage("email priya that the cloves shipment is delayed")]},
         {"configurable": {"thread_id": "w-1", "google_access_token": "tok-123"}},
     )
 
-    assert result["route"]["capability"] == "workspace"
     assert provider.access_tokens == ["tok-123"]  # the operator's token flowed to the MCP client seam
     assert provider.sent == [
         {"to": "priya@example.com", "body": "The cloves shipment is delayed two days."}
@@ -128,8 +135,8 @@ def test_workspace_runs_the_tool_loop_with_the_operator_token():
 
 
 def test_workspace_loop_drives_async_only_mcp_tools():
-    """Regression guard for the `asyncio.run(agent.ainvoke(...))` fix: MCP tools are coroutine-only,
-    so the loop MUST run on the async path. A revert to a sync `agent.invoke(...)` would raise
+    """Regression guard for the async loop: MCP tools are coroutine-only, so the loop MUST run on the
+    async path (`await agent.ainvoke(...)`). A revert to a sync `agent.invoke(...)` would raise
     `NotImplementedError: StructuredTool does not support sync invocation` (it isn't a `ToolException`,
     so `handle_workspace_error` can't absorb it) — the tool would never run and `sent` would stay empty."""
     model = ScriptedChatModel(
@@ -146,7 +153,7 @@ def test_workspace_loop_drives_async_only_mcp_tools():
     agent = build_workspace_agent(model=model, tools_provider=provider)
     orch = _workspace_orch(agent)
 
-    result = orch.invoke(
+    result = _run(orch,
         {"messages": [HumanMessage("email priya that the cloves shipment is delayed")]},
         {"configurable": {"thread_id": "w-async", "google_access_token": "tok-123"}},
     )
@@ -181,7 +188,7 @@ def test_workspace_tool_failure_becomes_a_self_correction_message():
     agent = build_workspace_agent(model=model, tools_provider=provider)
     orch = _workspace_orch(agent)
 
-    result = orch.invoke(
+    result = _run(orch,
         {"messages": [HumanMessage("email someone")]},
         {"configurable": {"thread_id": "w-err", "google_access_token": "tok"}},
     )
@@ -200,7 +207,7 @@ def test_workspace_degrades_without_a_token():
     agent = build_workspace_agent(model=ScriptedChatModel([]), tools_provider=provider)
     orch = _workspace_orch(agent)
 
-    result = orch.invoke(
+    result = _run(orch,
         {"messages": [HumanMessage("email priya the shipment is delayed")]},
         {"configurable": {"thread_id": "w-2"}},  # no google_access_token
     )
@@ -209,16 +216,41 @@ def test_workspace_degrades_without_a_token():
     assert provider.access_tokens == []  # the agent must not run without a token
 
 
-def test_workspace_disabled_needs_no_mcp_dependency():
-    """Flag OFF (no workspace_agent injected, the default) → routing to workspace still yields the
-    'connect' reply and never imports the optional langchain-mcp-adapters extra."""
-    orch = _workspace_orch(None)  # workspace_agent=None mirrors the flag-off default
+def test_workspace_disabled_does_not_import_mcp():
+    """Flag OFF (workspace_agent=None) → delegating to workspace still yields the 'connect' reply via
+    the sync stub node, and never imports langchain-mcp-adapters. The adapter is a base dependency now
+    (workspace is first-party), but the flag-off path must stay lazy — turning workspace off keeps the
+    import out of the hot path / startup."""
+    orch = _workspace_orch(None)  # workspace_agent=None + workspace_enabled=False → the sync stub
 
-    result = orch.invoke(
+    result = _run(orch,
         {"messages": [HumanMessage("send an email for me")]},
         {"configurable": {"thread_id": "w-3", "google_access_token": "tok-123"}},
     )
 
     assert "connect your google workspace" in result["messages"][-1].content.lower()
-    # The base/offline path must not pull the optional MCP adapter (it's the `workspace` extra).
+    # Flag-off path must not import the MCP adapter even though it's installed (lazy-import discipline).
     assert "langchain_mcp_adapters" not in sys.modules
+
+
+def test_workspace_first_party_default_wires_the_async_node():
+    """The SHIPPED default (workspace_enabled=True) builds the real async workspace node without a
+    provider key (the model is built lazily) and, with no per-run Google token, degrades to the
+    'connect' reply — proving the first-party default is wired (no agent injected, no MCP server,
+    no key)."""
+    orch = build_orchestrator(
+        # The shipped default; the offline suite pins it OFF (conftest), so set it explicitly here.
+        settings=Settings(workspace_enabled=True),
+        supervisor_model=ScriptedChatModel(
+            [ai_tool_call("to_workspace", {"task": "email someone"}, "h1"), ai_final("")]
+        ),
+        analytics_graph=_stub_node,
+        marketing_graph=_stub_node,
+        checkpointer=InMemorySaver(),
+    )
+    # No google_access_token → connect-degrade; the real agent never runs, so no MCP call/import.
+    result = _run(orch,
+        {"messages": [HumanMessage("email someone")]},
+        {"configurable": {"thread_id": "w-fp"}},
+    )
+    assert "connect your google workspace" in result["messages"][-1].content.lower()

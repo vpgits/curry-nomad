@@ -1,14 +1,25 @@
-"""The orchestrator graph — routing (the entry point).
+"""The orchestrator graph — a supervisor over the capabilities (the entry point).
 
-    START → route → (Command goto) → analytics | marketing | routing | workspace | clarify → END
+    START → supervisor ⇄ { analytics | marketing | workspace } → (supervisor) → END
 
-A cheap classifier (router model) decides which capability handles the request, then a
-`Command(goto=...)` dispatches to it. Capabilities are a deliberate mix: a compiled-subgraph node
-(analytics), imperative `.invoke()`/agent nodes (marketing, workspace), and a deterministic service
-node (routing). Passing each node's `config` through means a HITL interrupt inside the marketing
-subgraph bubbles up and pauses the whole orchestrator, and a `Command(resume=...)` on the same
-thread_id flows back down into it. That's the canonical demo: ask a data question → get an answer →
-"make a video ad for it" → pause for review → finish, all on one thread.
+A coordinating **supervisor** (the "main agent") reads the conversation and delegates to one
+specialist capability at a time by calling a handoff tool (`to_analytics` / `to_marketing` /
+`to_workspace`). Each capability runs as a graph node and **returns to the supervisor**, so the
+supervisor can chain them in a single turn — e.g. answer a data question, THEN build a brief from
+that answer. When the specialists have handled the request the supervisor stops (and stays silent,
+since the capability already answered inline); for an ambiguous request it replies with a short
+clarifying question instead of delegating.
+
+Capabilities are a deliberate mix of shapes the supervisor doesn't have to care about: compiled
+subgraph nodes (analytics, workspace — they share the chat `messages` channel and stream inline)
+and an imperative function node (marketing — its workflow state is disjoint, so it wraps the
+subgraph and translates in/out). Passing each node's `config` through means a HITL interrupt inside
+the marketing subgraph bubbles up and pauses the whole orchestrator, and a `Command(resume=...)` on
+the same thread_id flows back down into it.
+
+The supervisor itself uses `disable_streaming=True` (its handoff tool-calls are control plumbing,
+never user-facing text — same reason the dashboard/marketing models disable streaming); the
+*answer* the user sees streams from the capabilities, whose tokens ARE the answer.
 """
 
 from __future__ import annotations
@@ -16,7 +27,8 @@ from __future__ import annotations
 from typing import Literal
 
 from langchain.chat_models import init_chat_model
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import tool
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.ui import push_ui_message
 from langgraph.types import Command
@@ -25,25 +37,79 @@ from nora.analytics.graph import build_analytics_graph
 from nora.config import Settings, get_settings
 from nora.marketing.graph import build_marketing_graph, initial_marketing_state
 from nora.observability import get_logger
-from nora.schemas import AnalyticsDashboard, Context, RouteDecision
+from nora.schemas import AnalyticsDashboard, Context
 from nora.state import OrchestratorState
 
 log = get_logger(__name__)
 
-ROUTER_INSTRUCTIONS = (
-    "You route requests for Nora, Curry Nomad's operations assistant, to one capability:\n"
-    "- 'analytics': questions about business data/metrics (sales, revenue, products, "
-    "customers, refunds, channels, time windows).\n"
-    "- 'marketing': requests to CREATE or GENERATE a video ad / reel / creative for a product.\n"
-    "- 'routing': requests to PLAN, OPTIMIZE, or SHOW today's delivery route / the delivery map "
-    "(which stops, in what order, how far, dispatch the van).\n"
-    "- 'workspace': requests to ACT on the operator's own Google account — draft or send an email "
-    "(Gmail), add or list tasks (Google Tasks), create or edit a Google Doc or Sheet, or find/read "
-    "a file in Google Drive.\n"
-    "- 'clarify': ambiguous, or neither of the above.\n\n"
-    "For a marketing request that references a product (by name, or 'it'/'that one' pointing "
-    "at a product discussed earlier), set product_hint to that product's name. Always give a "
-    "one-line reason."
+
+# --- The supervisor's handoff tools -----------------------------------------------------
+# These are never executed: the supervisor model *calls* one to signal a delegation, and the
+# supervisor node reads that tool-call and dispatches with Command(goto=...). They exist only for
+# their schema (name + args), which is what `bind_tools` shows the model.
+
+
+@tool
+def to_analytics(task: str) -> str:
+    """Delegate to the analytics agent: answer a question about business data/metrics (sales,
+    revenue, products, customers, refunds, channels, time windows) by querying the database.
+    `task` is a clear, self-contained instruction for the analyst."""
+    return ""
+
+
+@tool
+def to_marketing(task: str, product_hint: str | None = None) -> str:
+    """Delegate to the marketing studio: CREATE a video ad / reel / creative for a product.
+    `task` describes the creative request; set `product_hint` to the product's name when one is
+    identifiable (resolve 'it'/'that one' from the conversation)."""
+    return ""
+
+
+@tool
+def to_workspace(task: str) -> str:
+    """Delegate to the workspace agent: act on the operator's own Google account — draft or send
+    an email (Gmail), or read/create a calendar event. `task` is the action to carry out."""
+    return ""
+
+
+HANDOFF_TOOLS = [to_analytics, to_marketing, to_workspace]
+HANDOFF_TARGET = {"to_analytics": "analytics", "to_marketing": "marketing", "to_workspace": "workspace"}
+# Loop guard: cap how many capability hops one turn may chain, so the supervisor can't delegate
+# forever (belt-and-braces with the run's recursion_limit).
+MAX_DELEGATIONS = 6
+
+SUPERVISOR_INSTRUCTIONS = (
+    "You are the supervisor for Nora, Curry Nomad's operations assistant. You coordinate three "
+    "specialist capabilities by delegating with the handoff tools — you do NOT do their work "
+    "yourself:\n"
+    "- to_analytics: business data/metrics questions (sales, revenue, products, customers, "
+    "refunds, channels, time windows), answered by querying the database.\n"
+    "- to_marketing: CREATE a video ad / reel / creative for a product.\n"
+    "- to_workspace: act on the operator's own Google account — draft or send an email (Gmail), "
+    "read or create a calendar event.\n\n"
+    "Rules:\n"
+    "1. To use a capability, call its handoff tool with a clear, self-contained `task`. For a "
+    "marketing request set `product_hint` to the product's name (resolve 'it'/'that one' from the "
+    "conversation).\n"
+    "2. You may delegate more than once to CHAIN capabilities — e.g. analyze data, THEN create a "
+    "brief from the result. Delegate one capability at a time; its result comes back to you.\n"
+    "3. When the specialists have fully handled the request, STOP — do not call another tool and "
+    "do not restate their answer; just end.\n"
+    "4. If the request is ambiguous or matches no capability, do NOT call a tool — reply with one "
+    "short clarifying question (ask whether they want a data answer or a video ad, and for which "
+    "product)."
+)
+
+# Shown when the supervisor itself fails (a flaky classifier shouldn't crash the turn).
+CLARIFY_TEXT = (
+    "I can answer a question about the business data, or create a video ad for a product. Which "
+    "would you like — and for which product?"
+)
+
+# Shown when the workspace capability is unavailable (flag off, or no Google token connected yet).
+CONNECT_MSG = (
+    "Connect your Google Workspace and I can act on your Gmail and Calendar — use the “Connect "
+    "Google Workspace” button, then ask me again."
 )
 
 
@@ -52,6 +118,29 @@ def _last_user_text(messages: list) -> str:
         if isinstance(message, HumanMessage):
             return message.content if isinstance(message.content, str) else str(message.content)
     return ""
+
+
+def _handoff_count(messages: list) -> int:
+    """How many times the supervisor has already delegated this thread — the loop-guard counter."""
+    return sum(
+        1
+        for m in messages
+        for tc in (getattr(m, "tool_calls", None) or [])
+        if tc.get("name") in HANDOFF_TARGET
+    )
+
+
+def _capability_answered_this_turn(messages: list) -> bool:
+    """True if a capability has produced a user-facing answer since the last user message — a
+    content-bearing AIMessage with no tool calls. Lets the supervisor end SILENTLY rather than
+    restate an answer a capability already streamed into the thread (the supervisor's own delegating
+    messages carry handoff tool_calls, so they don't count)."""
+    for m in reversed(messages):
+        if isinstance(m, HumanMessage):
+            return False
+        if isinstance(m, AIMessage) and m.content and not getattr(m, "tool_calls", None):
+            return True
+    return False
 
 
 DASHBOARD_INSTRUCTIONS = (
@@ -120,46 +209,32 @@ def _build_dashboard(model, answer: str, query_results: str) -> AnalyticsDashboa
     return dashboard
 
 
-def _plan_route_via_ops_api(ops_api_url: str) -> dict:
-    """Plan a delivery route by calling the operations service — the SAME `POST /routes/plan` the web
-    app uses (lib/ops.ts). The agent is just another REST client of the ops API, so the writable ops
-    DB stays single-owner (no dual-writer SQLite). Returns the RoutePlan dict the endpoint emits."""
-    import httpx
-
-    resp = httpx.post(f"{ops_api_url.rstrip('/')}/routes/plan", json={}, timeout=10.0)
-    resp.raise_for_status()
-    data = resp.json()
-    if isinstance(data, dict) and "error" in data:
-        raise RuntimeError(data["error"])
-    return data
-
-
 def build_orchestrator(
     *,
     settings: Settings | None = None,
-    router_model=None,
+    supervisor_model=None,
     analytics_graph=None,
     marketing_graph=None,
     dashboard_model=None,
-    route_planner=None,
     workspace_agent=None,
     checkpointer=None,
     store=None,
 ):
-    """Compile the orchestrator. Subgraphs/router are injectable for offline tests; by default
+    """Compile the orchestrator. Subgraphs/supervisor are injectable for offline tests; by default
     they're built from settings and share the orchestrator's `store` (so memory works) while
     relying on the orchestrator's `checkpointer` for HITL (passed via each node's config)."""
     settings = settings or get_settings()
-    if router_model is None:
-        # disable_streaming: the router classifies via with_structured_output — a forced tool call
-        # whose parsed result is consumed into `route`, never appended to `messages`. With streaming
-        # on, Aegra's `messages` stream still emits that internal call's token/tool-call
-        # deltas (it captures every LLM call via callbacks), so the useStream UI would briefly render a phantom
-        # partial message for a result that never lands. Disabling streaming keeps this internal call
-        # off the token stream; it is never user-facing text, so nothing is lost. (The router,
-        # dashboard, and marketing models all disable streaming for this reason; the analytics agent
-        # keeps streaming on because its tokens ARE the user-facing answer.)
-        router_model = init_chat_model(settings.router_model, temperature=0, disable_streaming=True)
+    if supervisor_model is None:
+        # disable_streaming: the supervisor delegates via handoff tool-calls (control plumbing), not
+        # user-facing text. With streaming on, Aegra's `messages` stream still emits those internal
+        # tool-call deltas (it captures every LLM call via callbacks), so the useStream UI would
+        # briefly render a phantom partial message for a delegation. Disabling streaming keeps the
+        # supervisor off the token stream; the user-facing ANSWER streams from the capabilities,
+        # whose tokens ARE the answer. (The dashboard and marketing models disable streaming for the
+        # same reason; the analytics agent keeps streaming on.)
+        supervisor_model = init_chat_model(
+            settings.router_model, temperature=0, disable_streaming=True
+        )
     if analytics_graph is None:
         analytics_graph = build_analytics_graph(settings=settings, store=store)
     if marketing_graph is None:
@@ -169,21 +244,14 @@ def build_orchestrator(
             settings=settings, store=store, auto_approve=False, auto_choose=False
         )
     if dashboard_model is None:
-        # Composes the generative-UI dashboard from an analytics answer — another
-        # with_structured_output call whose result never lands in `messages`, so disable_streaming
-        # for the same reason as the router (above). Construction needs a provider key; without one
-        # (e.g. offline tests that don't inject a fake) we simply disable the dashboard — never the
-        # text answer.
+        # Composes the generative-UI dashboard from an analytics answer — a with_structured_output
+        # call whose result never lands in `messages`, so disable_streaming for the same reason as
+        # the supervisor (above). Construction needs a provider key; without one (e.g. offline tests
+        # that don't inject a fake) we simply disable the dashboard — never the text answer.
         try:
             dashboard_model = init_chat_model(settings.model, temperature=0, disable_streaming=True)
         except Exception:  # noqa: BLE001 — no key → dashboards off, the rest of the app still runs
             dashboard_model = None
-    if route_planner is None:
-        # The routing capability plans a route by calling the ops API. Injectable so offline tests
-        # supply a canned plan (no HTTP) and a future in-process `services.plan_route(store)` is a
-        # one-line swap.
-        def route_planner() -> dict:
-            return _plan_route_via_ops_api(settings.ops_api_url)
     if workspace_agent is None and settings.workspace_enabled:
         # Build the workspace capability ONLY when the flag is on — the import (and thus
         # langchain-mcp-adapters) is deferred so the base install stays dependency-light and the
@@ -193,21 +261,51 @@ def build_orchestrator(
 
         workspace_agent = _build_workspace_agent(settings=settings)
 
-    def route(
+    def supervisor(
         state: OrchestratorState,
-    ) -> Command[Literal["analytics", "marketing", "routing", "workspace", "clarify"]]:
-        classifier = router_model.with_structured_output(RouteDecision)
+    ) -> Command[Literal["analytics", "marketing", "workspace", "__end__"]]:
+        # The coordinating "main agent": read the conversation, delegate to one capability (a handoff
+        # tool-call → Command(goto=...)), or finish. Capabilities return here, so it can chain them.
+        messages = state["messages"]
+        capped = _handoff_count(messages) >= MAX_DELEGATIONS
+        # Past the delegation cap → drop the tools so the model can only answer (no more hops).
+        model = supervisor_model if capped else supervisor_model.bind_tools(HANDOFF_TOOLS)
+        instructions = SUPERVISOR_INSTRUCTIONS + (
+            "\n\nYou have delegated as much as allowed — answer the user directly now; do not "
+            "delegate." if capped else ""
+        )
         try:
-            decision: RouteDecision = classifier.invoke(
-                [SystemMessage(content=ROUTER_INSTRUCTIONS), *state["messages"]]
+            ai = model.invoke([SystemMessage(content=instructions), *messages])
+        except Exception as exc:  # noqa: BLE001 — a flaky supervisor shouldn't crash the turn
+            log.info("supervisor.failed", error=str(exc))
+            return Command(goto=END, update={"messages": [AIMessage(content=CLARIFY_TEXT)]})
+
+        calls = [c for c in (getattr(ai, "tool_calls", None) or []) if c.get("name") in HANDOFF_TARGET]
+        if calls:
+            first = calls[0]
+            target = HANDOFF_TARGET[first["name"]]
+            # Ack EVERY tool-call the model made (the next supervisor turn rejects an unanswered
+            # tool_call), but hand off only to the first — capabilities run one at a time.
+            acks = [
+                ToolMessage(
+                    content=f"Handing off to {HANDOFF_TARGET[c['name']]}.", tool_call_id=c["id"]
+                )
+                for c in calls
+            ]
+            args = first.get("args") or {}
+            log.info("route.decided", capability=target, task=args.get("task"))
+            return Command(
+                goto=target,
+                update={"messages": [ai, *acks], "handoff": {"target": target, **args}},
             )
-        except Exception as exc:  # noqa: BLE001 — a flaky classifier shouldn't crash the turn; clarify
-            log.info("route.failed", error=str(exc))
-            fallback = RouteDecision(capability="clarify", reason="router unavailable")
-            return Command(goto="clarify", update={"route": fallback.model_dump()})
-        log.info("route.decided", capability=decision.capability, reason=decision.reason)
-        # Store the dump, not the model — graph state is JSON-native (see nora/state.py).
-        return Command(goto=decision.capability, update={"route": decision.model_dump()})
+
+        # No handoff → the turn is done. Stay SILENT if a capability already answered (its answer is
+        # the reply); otherwise this is a clarification (or a no-capability reply) — surface the text.
+        if _capability_answered_this_turn(messages):
+            log.info("supervisor.done")
+            return Command(goto=END)
+        log.info("supervisor.clarify")
+        return Command(goto=END, update={"messages": [ai]})
 
     def analytics_dashboard(state: OrchestratorState) -> dict:
         # Runs right AFTER the analytics agent subgraph node. The agent's full tool loop — its
@@ -232,21 +330,19 @@ def build_orchestrator(
         return {"messages": [final]}
 
     def marketing(state: OrchestratorState, config) -> dict:
-        route_decision = state.get("route")  # RouteDecision dict (JSON-native state)
-        request = _last_user_text(state["messages"])
-        product_hint = route_decision["product_hint"] if route_decision else None
-        # If the subgraph interrupts (human_review), this bubbles up and pauses the orchestrator;
-        # on resume the node re-runs and the subgraph continues from its checkpoint.
-        result = marketing_graph.invoke(
-            initial_marketing_state(request, product_hint), config
-        )
+        handoff = state.get("handoff") or {}  # the supervisor's delegation (JSON-native state)
+        request = handoff.get("task") or _last_user_text(state["messages"])
+        product_hint = handoff.get("product_hint")
+        # If the subgraph interrupts (concept_pick / human_review), this bubbles up and pauses the
+        # orchestrator; on resume the node re-runs and the subgraph continues from its checkpoint.
+        result = marketing_graph.invoke(initial_marketing_state(request, product_hint), config)
         brief = result.get("brief")  # VideoBrief dict, or None if rejected at review
         if brief is None:  # rejected at review
             return {"messages": [AIMessage(content="Creative cancelled — no brief produced.")]}
         # Format the summary + attach the gen-UI cards. Guard THIS post-result block (NOT the
         # `.invoke` above — a HITL GraphInterrupt must still propagate to pause the orchestrator) so a
         # malformed/partial brief degrades to a text reply instead of crashing the turn, matching the
-        # routing/workspace nodes' "never crash, degrade" contract.
+        # workspace node's "never crash, degrade" contract.
         try:
             summary = (
                 f"Video brief ready for {brief['product_name']}: \"{brief['concept']}\" — hook: "
@@ -256,10 +352,8 @@ def build_orchestrator(
             )
             final = AIMessage(content=summary)
             # Generative UI: the finished workflow's artifacts as cards on the same channel the
-            # analytics dashboard uses (push_ui_message → LoadExternalComponent), instead of the old
-            # additional_kwargs brief. The brief is the headline; storyboard / script-timeline /
-            # critique are the supporting detail (the storyboard + the evaluator verdict aren't in the
-            # brief card). All anchored to this message via message_id.
+            # analytics dashboard uses (push_ui_message → LoadExternalComponent). The brief is the
+            # headline; storyboard / script-timeline / critique are the supporting detail.
             push_ui_message("video_brief", {"brief": brief}, message=final)
             if result.get("shots"):
                 push_ui_message(
@@ -292,54 +386,27 @@ def build_orchestrator(
                 ]
             }
 
-    def routing(state: OrchestratorState) -> dict:
-        # Plan today's delivery route and render it as a generative-UI map card — same push_ui_message
-        # channel as the analytics dashboard. Best-effort: if the ops service is unreachable, reply in
-        # text rather than crash the turn (generative UI is a nicety, never load-bearing).
-        try:
-            plan = route_planner()
-        except Exception as exc:  # noqa: BLE001 — ops API down → text reply, no card
-            log.info("routing.skipped", error=str(exc))
-            return {
-                "messages": [
-                    AIMessage(
-                        content="I couldn't reach the operations service to plan a route — is the "
-                        "ops API running?"
-                    )
-                ]
-            }
-        summary = (
-            f"Planned a delivery route for {plan['vehicle']}: {len(plan['ordered_stops'])} stops, "
-            f"{plan['total_km']:.1f} km (vs {plan['naive_km']:.1f} km unoptimized — "
-            f"{plan['improvement_pct']:.0f}% shorter), ~{plan['est_minutes']:.0f} min."
-        )
-        log.info("routing.planned", stops=len(plan["ordered_stops"]), total_km=plan["total_km"])
-        final = AIMessage(content=summary)
-        push_ui_message("route_map", plan, message=final)
-        return {"messages": [final]}
+    def workspace_stub(state: OrchestratorState) -> dict:
+        # Flag OFF (no `workspace_agent` built): a SYNC node that asks the operator to connect. Keeps
+        # the default orchestrator all-sync (so it never imports langchain-mcp-adapters and stays
+        # sync-invokable in the offline suite); the supervisor still delegates to "workspace".
+        return {"messages": [AIMessage(content=CONNECT_MSG)]}
 
-    def workspace(state: OrchestratorState, config) -> dict:
-        # Act on the operator's own Google account (Gmail/Calendar) via the Workspace MCP server —
-        # an agentic tool loop (the deliberate contrast with the deterministic `routing` node). Gated:
-        # needs the capability flag ON (so `workspace_agent` exists) AND a per-run Google access token
-        # the web client passes in `config.configurable`. Missing either → a friendly "connect" reply,
-        # never a crash (mirrors routing's ops-down degrade). Passing `config` through lets the inner
-        # agent's tool steps + streamed answer flow into the thread, like the marketing subgraph.
+    async def workspace(state: OrchestratorState, config) -> dict:
+        # Flag ON: act on the operator's own Google account (Gmail/Calendar) via the Workspace MCP
+        # server — an agentic tool loop, ASYNC because MCP tools are coroutine-only (so it `await`s
+        # the loop directly on the orchestrator's event loop — no asyncio.run bridge). Needs a per-run
+        # Google access token the web client passes in `config.configurable`; missing → connect reply.
         token = (config or {}).get("configurable", {}).get("google_access_token")
         # TODO(prod): the access token rides in run config, which the checkpointer persists. For
         # production, carry it as a claim in the Aegra auth JWT and read it from the authenticated
         # user so it never lands in state. Fine for a Testing-mode demo with short-lived tokens.
-        if workspace_agent is None or not token:
-            return {
-                "messages": [
-                    AIMessage(
-                        content="Connect your Google Workspace and I can act on your Gmail and "
-                        "Calendar — use the “Connect Google Workspace” button, then ask me again."
-                    )
-                ]
-            }
+        if not token:
+            return {"messages": [AIMessage(content=CONNECT_MSG)]}
         try:
-            new_messages = workspace_agent(state["messages"], access_token=token, config=config)
+            new_messages = await workspace_agent(
+                state["messages"], access_token=token, config=config
+            )
         except Exception as exc:  # noqa: BLE001 — MCP/transport failure → text reply, never crash
             log.info("workspace.skipped", error=str(exc))
             return {
@@ -364,43 +431,31 @@ def build_orchestrator(
         log.info("workspace.completed", new_messages=len(new_messages), tools=len(tools_used))
         return {"messages": new_messages}
 
-    def clarify(state: OrchestratorState) -> dict:
-        return {
-            "messages": [
-                AIMessage(
-                    content="I can answer a question about the business data, or create a video "
-                    "ad for a product. Which would you like — and for which product?"
-                )
-            ]
-        }
-
     builder = StateGraph(OrchestratorState, context_schema=Context)
-    builder.add_node("route", route)
+    builder.add_node("supervisor", supervisor)
     # Analytics is added as a real subgraph NODE (not invoked imperatively): because it's part of
     # the graph, its messages — the run_sql tool-call steps AND the streamed final answer — flow
     # live into the top-level thread and render inline (clients opt in with `streamSubgraphs: true`).
     # `analytics_dashboard` runs right after to attach the generative-UI card from that answer.
     builder.add_node("analytics", analytics_graph)
     builder.add_node("analytics_dashboard", analytics_dashboard)
-    # Marketing stays an imperative function node: its state is disjoint from the chat (it produces
-    # a structured brief, not a token-streamed reply), and invoking the subgraph with `config` is
-    # what lets a HITL interrupt() deep inside it bubble up and pause the whole orchestrator.
+    # Marketing is an imperative function node: its workflow state is disjoint from the chat (it
+    # produces a structured brief, not a token-streamed reply), and invoking the subgraph with
+    # `config` is what lets a HITL interrupt() deep inside it bubble up and pause the orchestrator.
     builder.add_node("marketing", marketing)
-    # Routing: a deterministic ops capability (no LLM) — plans the delivery route via the ops API and
-    # pushes a route_map generative-UI card.
-    builder.add_node("routing", routing)
     # Workspace: an agentic tool loop over the Google Workspace MCP server — acts on the operator's
-    # own Gmail/Calendar. The deliberate contrast with `routing` (agent vs deterministic service).
-    builder.add_node("workspace", workspace)
-    builder.add_node("clarify", clarify)
-    builder.add_edge(START, "route")
-    # route dispatches via Command(goto=...); analytics flows through its dashboard, then each ends.
+    # own Gmail/Calendar. Flag OFF → a sync "connect" stub (keeps the default orchestrator all-sync);
+    # flag ON → the async agent node (awaits the per-run MCP loop). The supervisor delegates here
+    # either way.
+    builder.add_node("workspace", workspace if workspace_agent is not None else workspace_stub)
+
+    builder.add_edge(START, "supervisor")
+    # The supervisor dispatches via Command(goto=...). Every capability returns TO the supervisor
+    # (not END), so it can decide to chain another capability or finish the turn.
     builder.add_edge("analytics", "analytics_dashboard")
-    builder.add_edge("analytics_dashboard", END)
-    builder.add_edge("marketing", END)
-    builder.add_edge("routing", END)
-    builder.add_edge("workspace", END)
-    builder.add_edge("clarify", END)
+    builder.add_edge("analytics_dashboard", "supervisor")
+    builder.add_edge("marketing", "supervisor")
+    builder.add_edge("workspace", "supervisor")
 
     return builder.compile(checkpointer=checkpointer, store=store)
 
