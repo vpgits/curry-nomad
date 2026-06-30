@@ -15,6 +15,7 @@ import type {
   WorkspaceDecision,
 } from "@/lib/types";
 import { buildSubmitConfig } from "@/lib/run-config";
+import { useSubmitLock } from "@/lib/use-submit-lock";
 import { useStreamContext } from "@/providers/Stream";
 import { cn } from "@/lib/utils";
 
@@ -64,6 +65,7 @@ function resolveLayout(a: WorkspaceActionRequest): ApprovalLayout {
 export function WorkspaceApproval({ interrupt }: { interrupt: WorkspaceApprovalInterrupt }) {
   const stream = useStreamContext();
   const busy = stream.isLoading;
+  const [locked, runLocked] = useSubmitLock();
   const actions = interrupt.action_requests ?? [];
 
   const [editing, setEditing] = useState(false);
@@ -101,23 +103,26 @@ export function WorkspaceApproval({ interrupt }: { interrupt: WorkspaceApprovalI
     });
   };
 
-  const approve = () => {
-    const decisions: WorkspaceDecision[] = actions.map((a, i) => {
-      if (!editing) return { type: "approve" };
-      const args = fromFields(fields[i]);
-      // Only mark it an edit if the operator actually changed the args; otherwise plain approve.
-      const changed = JSON.stringify(args) !== JSON.stringify(argsOf(a));
-      return changed ? { type: "edit", edited_action: { name: a.name, args } } : { type: "approve" };
+  const approve = () =>
+    runLocked(async () => {
+      const decisions: WorkspaceDecision[] = actions.map((a, i) => {
+        if (!editing) return { type: "approve" };
+        const args = fromFields(fields[i]);
+        // Only mark it an edit if the operator actually changed the args; otherwise plain approve.
+        const changed = JSON.stringify(args) !== JSON.stringify(argsOf(a));
+        return changed ? { type: "edit", edited_action: { name: a.name, args } } : { type: "approve" };
+      });
+      await resume(decisions);
     });
-    resume(decisions);
-  };
 
   const reject = () =>
-    resume(
-      actions.map(() => ({
-        type: "reject",
-        message: "The operator declined this action.",
-      })),
+    runLocked(() =>
+      resume(
+        actions.map(() => ({
+          type: "reject",
+          message: "The operator declined this action.",
+        })),
+      ),
     );
 
   return (
@@ -224,18 +229,18 @@ export function WorkspaceApproval({ interrupt }: { interrupt: WorkspaceApprovalI
         </div>
 
         <div className="flex items-center gap-2.5 pt-0.5">
-          <Button size="sm" disabled={busy || invalid} onClick={approve}>
+          <Button size="sm" disabled={busy || locked || invalid} onClick={approve}>
             <Check className="size-3.5" />
             {editing ? "Approve edited" : "Approve & run"}
           </Button>
-          <Button size="sm" variant="outline" disabled={busy} onClick={toggleEdit}>
+          <Button size="sm" variant="outline" disabled={busy || locked} onClick={toggleEdit}>
             <Pencil className="size-3.5" />
             {editing ? "Cancel edit" : "Edit"}
           </Button>
           <Button
             size="sm"
             variant="outline"
-            disabled={busy}
+            disabled={busy || locked}
             className="border-danger-edge text-danger-text hover:bg-danger-tint/40"
             onClick={reject}
           >

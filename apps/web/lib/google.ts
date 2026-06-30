@@ -115,6 +115,28 @@ export async function refreshAccessToken(refreshToken: string): Promise<GoogleTo
   };
 }
 
+// Resolve the operator's CURRENT access token from the raw encrypted cookie value, refreshing if it's
+// stale. Single source of truth shared by BOTH /api/google/token (returns it) and /api/google/status
+// (reports connected = resolvable) so the two can never disagree. Returns:
+//   - { access_token, rotatedCookie } — valid token; rotatedCookie is non-null only when a refresh
+//     happened (the caller must re-set the cookie so the refreshed token persists).
+//   - null — the cookie is unusable (decrypt failed / expired with no refresh token / refresh failed).
+//     The caller should treat this as DISCONNECTED and clear the stale cookie, so a dead grant can't
+//     keep reporting "connected" while every token fetch returns null.
+export async function resolveAccessToken(
+  raw: string,
+): Promise<{ access_token: string; rotatedCookie: string | null } | null> {
+  const tokens = await decryptTokens(raw);
+  if (!tokens) return null;
+  if (Date.now() <= tokens.expires_at - 60_000) {
+    return { access_token: tokens.access_token, rotatedCookie: null };
+  }
+  if (!tokens.refresh_token) return null;
+  const refreshed = await refreshAccessToken(tokens.refresh_token);
+  if (!refreshed) return null;
+  return { access_token: refreshed.access_token, rotatedCookie: await encryptTokens(refreshed) };
+}
+
 // Standard httpOnly cookie options for the encrypted token bundle (7 days ~ the Testing-mode cap).
 export const GW_COOKIE_OPTIONS = {
   httpOnly: true,

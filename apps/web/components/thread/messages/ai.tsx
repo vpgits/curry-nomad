@@ -28,6 +28,7 @@ import { VideoBriefCard } from "@/components/VideoBriefCard";
 import { WorkspaceActionsCard } from "@/components/workspace/workspace-actions-card";
 import { cn, getContentString, getReasoningString } from "@/lib/utils";
 import { buildSubmitConfig } from "@/lib/run-config";
+import { useSubmitLock } from "@/lib/use-submit-lock";
 import { useStreamContext } from "@/providers/Stream";
 import { MarkdownText } from "../markdown";
 import { BranchSwitcher } from "./shared";
@@ -387,6 +388,7 @@ function MessageBody({
   continuation: boolean;
 }) {
   const stream = useStreamContext();
+  const [locked, runLocked] = useSubmitLock();
   const meta = stream.getMessagesMetadata(message);
   const parentCheckpoint = meta?.firstSeenState?.parent_checkpoint;
 
@@ -498,8 +500,8 @@ function MessageBody({
               type="button"
               title="Regenerate"
               aria-label="Regenerate response"
-              disabled={isLoading}
-              onClick={regenerate}
+              disabled={isLoading || locked}
+              onClick={() => runLocked(regenerate)}
               className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
             >
               <RefreshCw className="size-3.5" />

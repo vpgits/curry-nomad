@@ -412,24 +412,21 @@ def build_orchestrator(
         if fresh:
             first = fresh[0]
             target = HANDOFF_TARGET[first["name"]]
-            # Ack EVERY tool-call the model made (an unanswered tool_call breaks the next supervisor
-            # turn), but hand off to only the first fresh one — capabilities run one at a time.
-            acks = [
-                ToolMessage(
-                    content=(
-                        f"Handing off to {HANDOFF_TARGET[c['name']]}."
-                        if c is first
-                        else f"Skipped {HANDOFF_TARGET[c['name']]} (one handoff at a time)."
-                    ),
-                    tool_call_id=c["id"],
-                )
-                for c in calls
-            ]
+            # Hand off to exactly ONE capability per hop. If the model emitted several handoffs in one
+            # response (parallel tool-calls), keep ONLY the one we act on and DROP the rest — don't
+            # "ack as skipped". Persisting a skipped tool-call would make the next hop's
+            # _delegated_targets_this_turn count that capability as already-delegated and suppress the
+            # model's re-request, so the skipped capability could NEVER run (it silently killed the
+            # analytics->marketing chain, and the "I'll come back to it" ack was a lie). Dropping it
+            # lets the model re-request it on the next hop, where it runs. (Also keeps _handoff_count at
+            # one per hop instead of burning the cap on parallel calls.)
+            ai.tool_calls = [first]
+            ack = ToolMessage(content=f"Handing off to {target}.", tool_call_id=first["id"])
             args = first.get("args") or {}
             log.info("route.decided", capability=target, task=args.get("task"))
             return Command(
                 goto=target,
-                update={"messages": [ai, *acks], "handoff": {"target": target, **args}},
+                update={"messages": [ai, ack], "handoff": {"target": target, **args}},
             )
 
         if calls:
@@ -573,6 +570,20 @@ def build_orchestrator(
             # (interrupt + resume control flow) so it propagates and pauses the orchestrator, exactly
             # like marketing's deliberately-unwrapped `.invoke()` (see the marketing node above).
             raise
+        except ValueError as exc:
+            # The middleware HITL path raises ValueError when the resume decisions don't line up with
+            # the pending writes (count/shape mismatch). Surface that accurately instead of letting the
+            # broad except below mislabel it a connection failure. No write ran (safe); the operator
+            # can re-open the approval and confirm.
+            log.info("workspace.approval_mismatch", error=str(exc))
+            return {
+                "messages": [
+                    AIMessage(
+                        content="I couldn't apply that approval — the response didn't line up with "
+                        "the pending actions. Please open the approval again and confirm."
+                    )
+                ]
+            }
         except Exception as exc:  # noqa: BLE001 — MCP/transport failure → text reply, never crash
             log.info("workspace.skipped", error=str(exc))
             return {
@@ -585,11 +596,24 @@ def build_orchestrator(
             }
         # Tag the turn with a gen-UI marker so the chat shows the "Workspace agent" badge and a
         # compact summary of the Google tools Nora used. Best-effort, like the other cards.
+        # A write the operator DECLINED still leaves a ToolMessage (the tool never ran), so don't list
+        # it as "used". The primitive gate tags rejects in additional_kwargs; also match the decline
+        # text (covers the middleware path + the web client's "declined" message). Best-effort, like
+        # the card itself.
+        rejected_ids = {
+            getattr(m, "tool_call_id", None)
+            for m in new_messages
+            if isinstance(m, ToolMessage)
+            and (
+                m.additional_kwargs.get("workspace_decision") == "reject"
+                or "declined" in str(m.content).lower()
+            )
+        }
         tools_used = [
             tc.get("name")
             for m in new_messages
             for tc in (getattr(m, "tool_calls", None) or [])
-            if tc.get("name")
+            if tc.get("name") and tc.get("id") not in rejected_ids
         ]
         final = next((m for m in reversed(new_messages) if isinstance(m, AIMessage)), None)
         if final is not None:

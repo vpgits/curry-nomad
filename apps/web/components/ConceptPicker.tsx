@@ -12,6 +12,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import type { ConceptPickInterrupt } from "@/lib/types";
+import { buildSubmitConfig } from "@/lib/run-config";
+import { useSubmitLock } from "@/lib/use-submit-lock";
 import { useStreamContext } from "@/providers/Stream";
 
 // The interactive concept-pick gate: the marketing workflow's parallel ideation, surfaced as
@@ -21,14 +23,21 @@ import { useStreamContext } from "@/providers/Stream";
 export function ConceptPicker({ interrupt }: { interrupt: ConceptPickInterrupt }) {
   const stream = useStreamContext();
   const busy = stream.isLoading;
+  const [locked, runLocked] = useSubmitLock();
 
-  const choose = (chosen_index: number) => {
-    stream.submit(undefined, {
-      command: { resume: { chosen_index } },
-      streamMode: ["values"],
-      streamSubgraphs: true,
+  // Carry the run config (Google token + Author-UI mode) on resume: run config is NOT persisted across
+  // an interrupt, so a marketing→workspace chain resumed from here would otherwise reach the workspace
+  // node tokenless and stub out. The lock blocks a double-fire during the token fetch.
+  const choose = (chosen_index: number) =>
+    runLocked(async () => {
+      const runConfig = await buildSubmitConfig();
+      stream.submit(undefined, {
+        command: { resume: { chosen_index } },
+        streamMode: ["values"],
+        streamSubgraphs: true,
+        ...runConfig,
+      });
     });
-  };
 
   return (
     <div className="flex items-start gap-3">
@@ -61,7 +70,7 @@ export function ConceptPicker({ interrupt }: { interrupt: ConceptPickInterrupt }
                 <Button
                   size="sm"
                   className="w-full"
-                  disabled={busy}
+                  disabled={busy || locked}
                   onClick={() => choose(i)}
                 >
                   Develop this concept

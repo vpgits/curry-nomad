@@ -10,6 +10,8 @@ import { Eyebrow } from "@/components/ui/typography";
 import { Textarea } from "@/components/ui/textarea";
 import { isWorkspaceApproval } from "@/lib/types";
 import type { ReviewDecision, ReviewInterrupt, ScriptBeat, ThreadInterrupt } from "@/lib/types";
+import { buildSubmitConfig } from "@/lib/run-config";
+import { useSubmitLock } from "@/lib/use-submit-lock";
 import { useStreamContext } from "@/providers/Stream";
 import { cn } from "@/lib/utils";
 
@@ -52,6 +54,7 @@ function Review({ interrupt }: { interrupt: ReviewInterrupt }) {
   const router = useRouter();
   const [threadId] = useQueryState("threadId");
   const isLoading = stream.isLoading;
+  const [locked, runLocked] = useSubmitLock();
 
   const [editing, setEditing] = useState(false);
   const [beats, setBeats] = useState<ScriptBeat[]>(interrupt.script_beats ?? []);
@@ -59,16 +62,21 @@ function Review({ interrupt }: { interrupt: ReviewInterrupt }) {
   const setVoiceover = (i: number, value: string) =>
     setBeats((prev) => prev.map((b, j) => (j === i ? { ...b, voiceover: value } : b)));
 
-  const decide = (decision: ReviewDecision) => {
-    stream.submit(undefined, {
-      command: { resume: decision },
-      streamMode: ["values"],
-      streamSubgraphs: true,
+  const decide = (decision: ReviewDecision) =>
+    runLocked(async () => {
+      // Carry the run config on resume — run config doesn't persist across an interrupt, so a
+      // marketing→workspace chain resumed from here would otherwise reach the workspace node tokenless.
+      const runConfig = await buildSubmitConfig();
+      stream.submit(undefined, {
+        command: { resume: decision },
+        streamMode: ["values"],
+        streamSubgraphs: true,
+        ...runConfig,
+      });
+      // The stream lives in the root layout, so it keeps running across this navigation — land on
+      // /ask to watch the storyboard + prompts stream in.
+      router.push(threadId ? `/ask?threadId=${threadId}` : "/ask");
     });
-    // The stream lives in the root layout, so it keeps running across this navigation — land on
-    // /ask to watch the storyboard + prompts stream in.
-    router.push(threadId ? `/ask?threadId=${threadId}` : "/ask");
-  };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -149,7 +157,7 @@ function Review({ interrupt }: { interrupt: ReviewInterrupt }) {
       {/* sticky action bar */}
       <div className="flex shrink-0 items-center gap-3 border-t bg-background px-[26px] py-3.5">
         <Button
-          disabled={isLoading}
+          disabled={isLoading || locked}
           className="rounded-[8px]"
           onClick={() =>
             decide(editing ? { approved: true, edited_script: beats } : { approved: true })
@@ -159,7 +167,7 @@ function Review({ interrupt }: { interrupt: ReviewInterrupt }) {
         </Button>
         <Button
           variant="outline"
-          disabled={isLoading}
+          disabled={isLoading || locked}
           className="rounded-[8px]"
           onClick={() => setEditing((e) => !e)}
         >
@@ -167,7 +175,7 @@ function Review({ interrupt }: { interrupt: ReviewInterrupt }) {
         </Button>
         <Button
           variant="outline"
-          disabled={isLoading}
+          disabled={isLoading || locked}
           className="rounded-[8px] border-danger-edge text-danger-text hover:bg-danger-tint/40"
           onClick={() => decide({ approved: false })}
         >

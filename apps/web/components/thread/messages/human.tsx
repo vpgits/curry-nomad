@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { getContentString } from "@/lib/utils";
 import { buildSubmitConfig } from "@/lib/run-config";
+import { useSubmitLock } from "@/lib/use-submit-lock";
 import { useStreamContext } from "@/providers/Stream";
 import { BranchSwitcher } from "./shared";
 
@@ -20,6 +21,7 @@ export function HumanMessage({ message, isLoading }: { message: Message; isLoadi
 
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(content);
+  const [locked, runLocked] = useSubmitLock();
 
   const submitEdit = async () => {
     const text = value.trim();
@@ -49,6 +51,9 @@ export function HumanMessage({ message, isLoading }: { message: Message; isLoadi
       {
         checkpoint: parentCheckpoint,
         streamMode: ["values"],
+        // Stream the analytics subgraph's steps live too — every other run-producing submit sets
+        // this; the edit fork was the lone exception, so an edited analytics turn didn't stream.
+        streamSubgraphs: true,
         ...runConfig,
         optimisticValues: (prev) => {
           const prevMessages = prev.messages ?? [];
@@ -78,7 +83,7 @@ export function HumanMessage({ message, isLoading }: { message: Message; isLoadi
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
-              submitEdit();
+              runLocked(submitEdit);
             }
             if (e.key === "Escape") {
               setValue(content);
@@ -90,7 +95,11 @@ export function HumanMessage({ message, isLoading }: { message: Message; isLoadi
           <Button size="sm" variant="outline" onClick={() => { setValue(content); setEditing(false); }}>
             <X /> Cancel
           </Button>
-          <Button size="sm" disabled={isLoading || !value.trim()} onClick={submitEdit}>
+          <Button
+            size="sm"
+            disabled={isLoading || locked || !value.trim()}
+            onClick={() => runLocked(submitEdit)}
+          >
             <Check /> Save
           </Button>
         </div>

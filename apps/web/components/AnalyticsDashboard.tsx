@@ -11,6 +11,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import type { AnalyticsDashboardData, DashboardStat } from "@/lib/types";
+import { buildSubmitConfig } from "@/lib/run-config";
+import { useSubmitLock } from "@/lib/use-submit-lock";
 import { useStreamContext } from "@/providers/Stream";
 
 const EMPTY_STATS: DashboardStat[] = [];
@@ -29,30 +31,36 @@ export function AnalyticsDashboard({
   chart,
 }: AnalyticsDashboardData) {
   const stream = useStreamContext();
+  const [, runLocked] = useSubmitLock();
   const hasChart =
     !!chart && chart.kind !== "none" && Array.isArray(chart.series) && chart.series.length > 0;
   if (stats.length === 0 && !table && !hasChart) return null;
 
   // Drill-down: a table row click asks the agent to break that row down further. The component is
   // mounted inside the StreamProvider tree (via LoadExternalComponent's local component map), so it
-  // can submit a fresh human turn just like the composer does (thread/index.tsx:send).
-  const drillInto = (label: string) => {
-    const content = `Break down "${label}" further.`;
-    stream.submit(
-      { messages: [{ type: "human", content }] },
-      {
-        streamMode: ["values"],
-        streamSubgraphs: true,
-        optimisticValues: (prev) => ({
-          ...prev,
-          messages: [
-            ...(prev.messages ?? []),
-            { type: "human", content, id: `tmp-${crypto.randomUUID()}` } as Message,
-          ],
-        }),
-      },
-    );
-  };
+  // can submit a fresh human turn just like the composer does (thread/index.tsx:send) — including the
+  // shared run config (Author-UI mode / Google token), which a drill-down previously dropped so the
+  // Author-UI toggle silently reverted to the fixed dashboard. The lock blocks a same-click re-fire.
+  const drillInto = (label: string) =>
+    runLocked(async () => {
+      const content = `Break down "${label}" further.`;
+      const runConfig = await buildSubmitConfig();
+      stream.submit(
+        { messages: [{ type: "human", content }] },
+        {
+          streamMode: ["values"],
+          streamSubgraphs: true,
+          ...runConfig,
+          optimisticValues: (prev) => ({
+            ...prev,
+            messages: [
+              ...(prev.messages ?? []),
+              { type: "human", content, id: `tmp-${crypto.randomUUID()}` } as Message,
+            ],
+          }),
+        },
+      );
+    });
 
   return (
     <Card className="gap-4">

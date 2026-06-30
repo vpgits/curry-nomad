@@ -18,8 +18,9 @@ drives the whole graph async (`astream`/`ainvoke`), so the workspace node simply
 `asyncio.run` bridge any more (that only existed when the node was sync).
 
 The default tools provider — the only place `langchain_mcp_adapters` is imported — is created lazily
-and imported lazily, so the base install never pulls the optional dependency and the offline test
-suite stays green (the capability is OFF by default; tests inject a fake provider).
+and imported lazily. `langchain_mcp_adapters` is a base dependency now, so the capability defaults ON
+(`settings.workspace_enabled = True`); the offline test suite stays green because conftest pins it
+OFF and tests inject a fake provider rather than minting a real MCP client.
 
 **Human-in-the-loop on write actions.** A Gmail/Calendar agent *acts on the real world* — sending an
 email is irreversible — so its **write** tool calls (send/create/update/delete) sit behind a human
@@ -114,6 +115,24 @@ _WRITE_VERBS = (
     "remove",
     "move",
     "trash",
+    # Docs/Sheets/Tasks/Drive mutations the granted scopes (docs:full sheets:full tasks:full) expose
+    # but the Gmail/Calendar-shaped verbs above miss — e.g. replace_text, append_values, clear_values,
+    # batch_update, complete_task, rename_/share_/copy_/upload_. Over-gating a read is safe; missing a
+    # write is not, so keep this list generous.
+    "replace",
+    "append",
+    "clear",
+    "complete",
+    "batch",
+    "rename",
+    "share",
+    "copy",
+    "upload",
+    "import",
+    "write",
+    "set",
+    "patch",
+    "put",
 )
 
 
@@ -349,6 +368,8 @@ def _make_gated_tools_node(
                             content=decision.get("message") or _DEFAULT_REJECT_MESSAGE,
                             tool_call_id=call_id,
                             name=name,
+                            # Tag so the orchestrator's "workspace_actions" badge skips declined writes.
+                            additional_kwargs={"workspace_decision": "reject"},
                         )
                     )
                     continue
