@@ -15,6 +15,7 @@ import {
 import type { Message } from "@langchain/langgraph-sdk";
 
 import { LoadExternalComponent } from "@langchain/langgraph-sdk/react-ui";
+import { toast } from "sonner";
 
 import { A2uiSurfaceView } from "@/components/A2uiSurfaceView";
 import { AnalyticsDashboard } from "@/components/AnalyticsDashboard";
@@ -418,6 +419,13 @@ function MessageBody({
   };
 
   const regenerate = () => {
+    // Without the fork checkpoint, this would run from HEAD and append a new turn at the end instead
+    // of regenerating THIS one as an alternate branch. Bail loudly. (If it fires, the turn's
+    // checkpoint isn't in the fetched history — see fetchStateHistory in providers/Stream.tsx.)
+    if (!parentCheckpoint) {
+      toast.error("Can't regenerate this turn — its checkpoint hasn't loaded yet. Try again in a moment.");
+      return;
+    }
     stream.submit(undefined, {
       checkpoint: parentCheckpoint,
       streamMode: ["values"],

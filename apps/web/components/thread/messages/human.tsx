@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Check, Pencil, X } from "lucide-react";
 import type { Message } from "@langchain/langgraph-sdk";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -22,6 +23,14 @@ export function HumanMessage({ message, isLoading }: { message: Message; isLoadi
   const submitEdit = () => {
     const text = value.trim();
     if (!text) return;
+    // Without the fork checkpoint, stream.submit would run from HEAD and silently APPEND the edit at
+    // the end of the thread instead of forking in place. Bail loudly rather than corrupt the thread.
+    // (If this fires, the turn's checkpoint isn't in the fetched history — see fetchStateHistory in
+    // providers/Stream.tsx.)
+    if (!parentCheckpoint) {
+      toast.error("Can't edit this turn — its checkpoint hasn't loaded yet. Try again in a moment.");
+      return;
+    }
     // Re-submit from the checkpoint before this turn → forks a new branch (the "edit" UX).
     stream.submit(
       { messages: [{ type: "human", content: text, id: message.id }] },

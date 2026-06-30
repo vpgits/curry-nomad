@@ -44,7 +44,12 @@ export function StreamProvider({ children }: { children: ReactNode }) {
     threadId: blocked ? null : (threadId ?? null),
     messagesKey: "messages",
     // Load prior messages + per-message checkpoint metadata (needed for edit/regenerate branching).
-    fetchStateHistory: true,
+    // Use a numeric limit, NOT `true`: `true` caps the fetched history at the SDK default of 10
+    // checkpoints, but one Nora turn burns several (route → capability → tool loop → dashboard), so
+    // for any non-trivial conversation the window doesn't reach an older turn's fork checkpoint.
+    // Editing/regenerating an older message then can't resolve `firstSeenState.parent_checkpoint`
+    // and silently runs from HEAD — the new turn appends at the end instead of forking in place.
+    fetchStateHistory: { limit: 1000 },
     onThreadId: (id) => {
       setThreadId(id);
       // A just-created thread isn't immediately searchable; after a beat, tag it (title from its
