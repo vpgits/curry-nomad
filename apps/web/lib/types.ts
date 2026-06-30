@@ -100,12 +100,29 @@ export type MarketingInterrupt = ReviewInterrupt | ConceptPickInterrupt;
 // One pending write the workspace agent wants to run (send/create/…), awaiting human approval. Both
 // HITL backends expose `name` + `args` (the installed HumanInTheLoopMiddleware uses `args`, same key
 // as the hand-written gate); `arguments` is tolerated as a fallback. `id` is present on path B only.
+// One field of the AI-authored approval card: the model picked the label/order; the `value` is the
+// LITERAL tool arg (filled by the backend, never paraphrased). `block` = long text (e.g. an email body).
+export interface ApprovalLayoutField {
+  label: string;
+  value: string;
+  style: "inline" | "block";
+}
+
+// The AI-authored layout for an approval card (primitive HITL path). Absent on the middleware path /
+// when there's no model — the web client then builds a literal fallback from the args.
+export interface ApprovalLayout {
+  icon: "email" | "calendar" | "document" | "generic";
+  title: string;
+  fields: ApprovalLayoutField[];
+}
+
 export interface WorkspaceActionRequest {
   name: string;
   args?: Record<string, unknown>;
   arguments?: Record<string, unknown>;
   id?: string;
   description?: string;
+  layout?: ApprovalLayout; // AI-authored presentation (values literal); fallback derived if absent
 }
 
 // Payload emitted when the workspace agent pauses before write actions. Unifies BOTH mechanisms:

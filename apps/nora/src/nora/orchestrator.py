@@ -123,13 +123,23 @@ def _last_user_text(messages: list) -> str:
 
 
 def _handoff_count(messages: list) -> int:
-    """How many times the supervisor has already delegated this thread — the loop-guard counter."""
-    return sum(
-        1
-        for m in messages
-        for tc in (getattr(m, "tool_calls", None) or [])
-        if tc.get("name") in HANDOFF_TARGET
-    )
+    """How many times the supervisor has delegated SINCE THE LAST USER MESSAGE — the within-turn loop
+    guard.
+
+    Scoped to the current turn (stops at the most recent HumanMessage), NOT thread-wide: a long
+    multi-turn conversation otherwise accumulates handoffs past `MAX_DELEGATIONS` and permanently caps
+    the supervisor — it drops the handoff tools and can never delegate again, so every later request
+    that needs a capability is refused ("I can't send it from here"). The cap is meant to stop a single
+    turn from looping, not to bound the whole conversation.
+    """
+    count = 0
+    for m in reversed(messages):
+        if isinstance(m, HumanMessage):
+            break
+        for tc in getattr(m, "tool_calls", None) or []:
+            if tc.get("name") in HANDOFF_TARGET:
+                count += 1
+    return count
 
 
 def _delegated_targets_this_turn(messages: list) -> set[str]:
@@ -271,6 +281,60 @@ def _author_surface(model, answer: str, query_results: str) -> A2uiSurface | Non
     return surface
 
 
+def _build_supervisor_model(settings: Settings):
+    """Build the supervisor (router) model.
+
+    Default: a cheap deterministic classifier (`temperature=0`). When `router_reasoning_effort` is
+    set AND the router model is an OpenAI gpt-5.x reasoning model, the supervisor instead *reasons*
+    about its delegation at that effort and emits an auto reasoning **summary** — better planning,
+    ambiguity recovery, and multi-step tool use (the router is the planner). `reasoning` switches the
+    model to the Responses API; `output_version="responses/v1"` puts the summary into the message's
+    `content` as a `reasoning` block, so it rides into the trace on the model call. No `temperature`
+    is passed — gpt-5.x reasoning models reject a non-default temperature.
+
+    Both paths `disable_streaming`: the router delegates via handoff tool-calls (control plumbing),
+    not user-facing text, so streaming would surface those internal tool-call deltas as phantom
+    partial messages on Aegra's `messages` stream. (The dashboard and marketing models disable
+    streaming for the same reason; only the analytics agent streams — its tokens ARE the answer.)
+    """
+    if settings.router_reasoning_effort:
+        return init_chat_model(
+            settings.router_model,
+            reasoning={"effort": settings.router_reasoning_effort, "summary": "auto"},
+            output_version="responses/v1",
+            use_responses_api=True,
+            disable_streaming=True,
+        )
+    return init_chat_model(settings.router_model, temperature=0, disable_streaming=True)
+
+
+def _strip_reasoning(message):
+    """Drop OpenAI reasoning items from a supervisor message before it re-enters the SHARED
+    orchestrator `messages` channel.
+
+    The reasoning summary is already captured on the model call at generation time (so it's in the
+    trace). But the `messages` channel is then read by the next supervisor hop AND by every capability
+    (analytics, marketing, workspace — each a fresh, possibly non-OpenAI model call); replaying a
+    dangling reasoning item there is the documented "reasoning without its required following item"
+    400. Stripping keeps the channel provider-clean and the round-trip safe. No-op when there's no
+    reasoning block (the gpt-4o-mini / non-reasoning default), so it's safe to apply unconditionally.
+    """
+    content = message.content
+    extra = message.additional_kwargs
+    content_has_reasoning = isinstance(content, list) and any(
+        isinstance(block, dict) and block.get("type") == "reasoning" for block in content
+    )
+    if not content_has_reasoning and "reasoning" not in extra:
+        return message
+    new_content = (
+        [b for b in content if not (isinstance(b, dict) and b.get("type") == "reasoning")]
+        if isinstance(content, list)
+        else content
+    )
+    new_extra = {k: v for k, v in extra.items() if k != "reasoning"}
+    return message.model_copy(update={"content": new_content, "additional_kwargs": new_extra})
+
+
 def build_orchestrator(
     *,
     settings: Settings | None = None,
@@ -287,16 +351,7 @@ def build_orchestrator(
     relying on the orchestrator's `checkpointer` for HITL (passed via each node's config)."""
     settings = settings or get_settings()
     if supervisor_model is None:
-        # disable_streaming: the supervisor delegates via handoff tool-calls (control plumbing), not
-        # user-facing text. With streaming on, Aegra's `messages` stream still emits those internal
-        # tool-call deltas (it captures every LLM call via callbacks), so the useStream UI would
-        # briefly render a phantom partial message for a delegation. Disabling streaming keeps the
-        # supervisor off the token stream; the user-facing ANSWER streams from the capabilities,
-        # whose tokens ARE the answer. (The dashboard and marketing models disable streaming for the
-        # same reason; the analytics agent keeps streaming on.)
-        supervisor_model = init_chat_model(
-            settings.router_model, temperature=0, disable_streaming=True
-        )
+        supervisor_model = _build_supervisor_model(settings)
     if analytics_graph is None:
         analytics_graph = build_analytics_graph(settings=settings, store=store)
     if marketing_graph is None:
@@ -321,7 +376,9 @@ def build_orchestrator(
         # None and the node degrades to a friendly "connect" reply (see below).
         from nora.workspace.graph import build_workspace_agent as _build_workspace_agent
 
-        workspace_agent = _build_workspace_agent(settings=settings)
+        # Reuse the dashboard model (a disable_streaming structured-output model, None if no key) to
+        # AI-author the HITL approval card on the primitive path — best-effort, like the dashboard.
+        workspace_agent = _build_workspace_agent(settings=settings, layout_model=dashboard_model)
 
     def supervisor(
         state: OrchestratorState,
@@ -341,6 +398,9 @@ def build_orchestrator(
         except Exception as exc:  # noqa: BLE001 — a flaky supervisor shouldn't crash the turn
             log.info("supervisor.failed", error=str(exc))
             return Command(goto=END, update={"messages": [AIMessage(content=CLARIFY_TEXT)]})
+        # If the router is a reasoning model, its summary is now captured on the model call (→ trace);
+        # strip the reasoning item before `ai` re-enters the shared `messages` channel (see helper).
+        ai = _strip_reasoning(ai)
 
         calls = [c for c in (getattr(ai, "tool_calls", None) or []) if c.get("name") in HANDOFF_TARGET]
         # Loop guard: a capability runs at most ONCE per turn. The supervisor (a cheap model) can

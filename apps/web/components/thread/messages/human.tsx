@@ -79,7 +79,9 @@ export function HumanMessage({ message, isLoading }: { message: Message; isLoadi
       <div className="max-w-[75%] rounded-[13px_5px_13px_13px] bg-ink px-[15px] py-[11px] text-[13.5px] leading-[1.5] whitespace-pre-wrap text-ink-foreground sm:max-w-[60%]">
         {content}
       </div>
-      <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+      <div className="flex items-center gap-1">
+        {/* Branch nav stays VISIBLE whenever alternate versions of this turn exist (editing forks a
+            branch), so the alternates are discoverable — not hidden behind hover. */}
         <BranchSwitcher
           branch={meta?.branch}
           branchOptions={meta?.branchOptions}
@@ -92,7 +94,7 @@ export function HumanMessage({ message, isLoading }: { message: Message; isLoadi
           aria-label="Edit message"
           disabled={isLoading}
           onClick={() => { setValue(content); setEditing(true); }}
-          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+          className="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground disabled:opacity-40 group-hover:opacity-100"
         >
           <Pencil className="size-3.5" />
         </button>

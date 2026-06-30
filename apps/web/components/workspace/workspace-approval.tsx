@@ -1,14 +1,55 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Mail, Pencil, X } from "lucide-react";
+import { Calendar, Check, FileText, Mail, Pencil, Wrench, X } from "lucide-react";
 
 import { NoraAvatar } from "@/components/thread/messages/ai";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import type { WorkspaceApprovalInterrupt, WorkspaceDecision } from "@/lib/types";
+import type {
+  ApprovalLayout,
+  ApprovalLayoutField,
+  WorkspaceActionRequest,
+  WorkspaceApprovalInterrupt,
+  WorkspaceDecision,
+} from "@/lib/types";
 import { useStreamContext } from "@/providers/Stream";
 import { cn } from "@/lib/utils";
+
+const APPROVAL_ICONS = {
+  email: Mail,
+  calendar: Calendar,
+  document: FileText,
+  generic: Wrench,
+} as const;
+
+function humanize(key: string): string {
+  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Faithful fallback when the backend didn't AI-author a layout (the middleware path, or no model):
+// build the card from the LITERAL args, picking an icon/title from the tool name. Values are the real
+// args verbatim — never paraphrased — so the approver still sees exactly what will run.
+function fallbackLayout(a: WorkspaceActionRequest): ApprovalLayout {
+  const args = (a.args ?? a.arguments ?? {}) as Record<string, unknown>;
+  const n = a.name.toLowerCase();
+  const icon: ApprovalLayout["icon"] = /gmail|email|mail/.test(n)
+    ? "email"
+    : /calendar|event/.test(n)
+      ? "calendar"
+      : /doc|file|sheet|drive/.test(n)
+        ? "document"
+        : "generic";
+  const fields: ApprovalLayoutField[] = Object.entries(args).map(([k, v]) => {
+    const value = typeof v === "string" ? v : JSON.stringify(v, null, 2);
+    return { label: humanize(k), value, style: value.length > 80 ? "block" : "inline" };
+  });
+  return { icon, title: humanize(a.name), fields };
+}
+
+function resolveLayout(a: WorkspaceActionRequest): ApprovalLayout {
+  return a.layout && Array.isArray(a.layout.fields) ? a.layout : fallbackLayout(a);
+}
 
 // The workspace write-approval gate — a single HITL surface for BOTH backend mechanisms:
 //   - path B ("primitive"): the hand-written loop's batched interrupt() — payload tags `kind:
@@ -76,34 +117,60 @@ export function WorkspaceApproval({ interrupt }: { interrupt: WorkspaceApprovalI
         </p>
 
         <div className="flex flex-col gap-2.5">
-          {actions.map((a, i) => (
-            <div
-              key={a.id ?? `${a.name}-${i}`}
-              className="rounded-[10px] border border-brand-edge bg-card p-3"
-            >
-              <div className="flex items-center gap-2">
-                <Mail className="size-4 shrink-0 text-brand" />
-                <span className="font-mono text-[12.5px] font-semibold">{a.name}</span>
+          {actions.map((a, i) => {
+            const layout = resolveLayout(a);
+            const Icon = APPROVAL_ICONS[layout.icon] ?? Wrench;
+            return (
+              <div
+                key={a.id ?? `${a.name}-${i}`}
+                className="rounded-[10px] border border-brand-edge bg-card p-3"
+              >
+                <div className="flex items-center gap-2">
+                  <Icon className="size-4 shrink-0 text-brand" />
+                  <span className="text-[13px] font-semibold">{layout.title}</span>
+                  <span className="ml-auto rounded-full bg-body-bg px-2 py-px font-mono text-[10px] text-muted-foreground">
+                    {a.name}
+                  </span>
+                </div>
+                {editing ? (
+                  // Edit operates on the LITERAL args (JSON) — the source of truth the layout derives from.
+                  <Textarea
+                    rows={Math.min(10, drafts[i].split("\n").length + 1)}
+                    value={drafts[i]}
+                    onChange={(e) =>
+                      setDrafts((prev) => prev.map((d, j) => (j === i ? e.target.value : d)))
+                    }
+                    className={cn(
+                      "mt-2 resize-y font-mono text-[12px]",
+                      !isJson(drafts[i]) && "border-danger-edge",
+                    )}
+                  />
+                ) : (
+                  <dl className="mt-2.5 flex flex-col gap-2">
+                    {layout.fields.map((f, j) => (
+                      <div
+                        key={`${f.label}-${j}`}
+                        className={cn(f.style === "block" ? "flex flex-col gap-1" : "flex items-baseline gap-2")}
+                      >
+                        <dt className="shrink-0 text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          {f.label}
+                        </dt>
+                        <dd
+                          className={cn(
+                            "break-words text-[13px] leading-[1.5]",
+                            f.style === "block" &&
+                              "whitespace-pre-wrap rounded-[6px] bg-body-bg px-2.5 py-2",
+                          )}
+                        >
+                          {f.value}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
               </div>
-              {editing ? (
-                <Textarea
-                  rows={Math.min(10, drafts[i].split("\n").length + 1)}
-                  value={drafts[i]}
-                  onChange={(e) =>
-                    setDrafts((prev) => prev.map((d, j) => (j === i ? e.target.value : d)))
-                  }
-                  className={cn(
-                    "mt-2 resize-y font-mono text-[12px]",
-                    !isJson(drafts[i]) && "border-danger-edge",
-                  )}
-                />
-              ) : (
-                <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded-[6px] bg-body-bg px-2.5 py-2 font-mono text-[12px] leading-[1.5]">
-                  {JSON.stringify(a.args ?? a.arguments ?? {}, null, 2)}
-                </pre>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         <div className="flex items-center gap-2.5 pt-0.5">

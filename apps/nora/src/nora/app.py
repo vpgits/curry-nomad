@@ -67,7 +67,9 @@ async def run_turn(graph, text: str, thread_id: str = THREAD_ID) -> dict:
         config["metadata"] = {
             "langfuse_session_id": thread_id,
             "langfuse_tags": ["nora", "cli"],
-            "langfuse_trace_name": "nora-turn",
+            # Name each turn by its message (truncated) so the Sessions view reads like the
+            # conversation — one named, ordered turn per trace — instead of N rows all named the same.
+            "langfuse_trace_name": text[:80] if text else "nora-turn",
         }
 
     inputs: dict | Command = {"messages": [HumanMessage(content=text)]}

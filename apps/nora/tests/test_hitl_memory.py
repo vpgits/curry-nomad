@@ -19,7 +19,7 @@ from nora.analytics.graph import build_analytics_graph
 from nora.marketing.graph import build_marketing_graph, initial_marketing_state
 from nora.memory import DEFINITIONS, seed_brand_knowledge
 from nora.schemas import VideoBrief
-from tests.fakes import ScriptedChatModel, ai_final
+from tests.fakes import ScriptedChatModel, ai_final, ai_tool_call
 from tests.test_marketing_graph import _passing_model
 
 THREAD = {"configurable": {"thread_id": "hitl-1"}}
@@ -104,7 +104,7 @@ def test_analytics_injects_store_definitions_into_prompt():
     that lets memory shape the SQL). Verified offline via a no-index store + capturing model."""
     store = InMemoryStore()
     store.put(DEFINITIONS, "revenue", {"text": "MAGIC_REVENUE_RULE net of refunds"})
-    model = ScriptedChatModel([ai_final("done")])
+    model = ScriptedChatModel([ai_tool_call("list_tables", {}, "c1"), ai_final("done")])  # engage DB (query guard)
     graph = build_analytics_graph(model=model, store=store)
 
     graph.invoke({"messages": [HumanMessage(content="What is total revenue?")]})
@@ -129,7 +129,7 @@ def test_brand_voice_from_store_reaches_the_script_prompt():
 
 
 def test_analytics_without_store_has_no_definitions_block():
-    model = ScriptedChatModel([ai_final("done")])
+    model = ScriptedChatModel([ai_tool_call("list_tables", {}, "c1"), ai_final("done")])  # engage DB (query guard)
     graph = build_analytics_graph(model=model)  # no store
     graph.invoke({"messages": [HumanMessage(content="How many orders?")]})
     system_text = " ".join(

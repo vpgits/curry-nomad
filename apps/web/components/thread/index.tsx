@@ -106,6 +106,10 @@ export function Thread() {
     const configurable: Record<string, unknown> = {};
     if (googleToken) configurable.google_access_token = googleToken;
     if (authorUi) configurable.ui_mode = "authored";
+    // NOTE (tracing): the Langfuse Sessions view already groups this thread's turns by thread_id
+    // automatically (Aegra's OTEL instrumentation sets the session). Per-turn trace *naming* /tags
+    // can't be set from here — the SDK's submit `config` only carries `configurable`, and the trace
+    // attributes are owned by Aegra's OTEL layer. The CLI path (app.py) names turns by message.
     stream.submit(
       { messages: [{ type: "human", content }] },
       {

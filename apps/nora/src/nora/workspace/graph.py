@@ -47,7 +47,7 @@ import json
 from collections.abc import Callable, Sequence
 
 from langchain.chat_models import init_chat_model
-from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
@@ -56,6 +56,7 @@ from langgraph.types import interrupt
 from nora.analytics.graph import should_continue  # reuse: "tools" if last.tool_calls else END
 from nora.config import Settings, get_settings
 from nora.observability import get_logger
+from nora.schemas import ApprovalLayout
 from nora.state import AnalyticsState
 
 log = get_logger(__name__)
@@ -231,7 +232,66 @@ def _normalize_decisions(raw, n: int) -> list[dict]:
     return decisions[:n]
 
 
-def _make_gated_tools_node(tools: Sequence[BaseTool], is_write: WriteToolPredicate):
+APPROVAL_LAYOUT_INSTRUCTIONS = (
+    "You compose a compact APPROVAL CARD for a pending Google Workspace WRITE action that a human is "
+    "about to approve before it runs. Choose an `icon` (email / calendar / document / generic), a "
+    "short `title` (e.g. 'Send email', 'Draft email', 'Create calendar event'), and an ordered list "
+    "of `fields`. Each field has a human `label`, the `arg_key` it reads its value from (use the EXACT "
+    "argument keys given — never invent or paraphrase values; the system fills the value), and a "
+    "`style`: 'block' for long free text like an email body, 'inline' for short values like a "
+    "recipient or subject. Order fields the way a reviewer would want to read them; skip pure "
+    "control/formatting args."
+)
+
+
+def _stringify(value) -> str:
+    return value if isinstance(value, str) else json.dumps(value, default=str)
+
+
+async def _author_approval_layout(layout_model, name: str, args: dict) -> dict | None:
+    """Best-effort: ask the model to AUTHOR an approval-card layout for one pending write action, then
+    resolve each field's value from the LITERAL args — the model only chooses the presentation
+    (icon/title/labels/order/which arg goes where), never the values, so the approver always sees
+    exactly what will run. Any arg the layout omits is appended, so nothing that will be sent is
+    hidden. Returns {icon, title, fields:[{label, value, style}]} or None (→ the web client renders its
+    own faithful fallback, e.g. on the middleware path or with no model/key)."""
+    if layout_model is None or not isinstance(args, dict) or not args:
+        return None
+    try:
+        context = (
+            f"Tool name: {name}\nArgument keys: {list(args.keys())}\n"
+            "Compose the card for these keys (values are filled by the system, not you)."
+        )
+        layout: ApprovalLayout = await layout_model.with_structured_output(ApprovalLayout).ainvoke(
+            [SystemMessage(content=APPROVAL_LAYOUT_INSTRUCTIONS), HumanMessage(content=context)]
+        )
+    except Exception as exc:  # noqa: BLE001 — authoring is best-effort; the UI falls back to a literal card
+        log.info("workspace.layout_author_failed", tool=name, error=str(exc))
+        return None
+
+    resolved: list[dict] = []
+    used: set[str] = set()
+    for field in layout.fields:
+        if field.arg_key in args:  # literal value, never the model's text
+            resolved.append(
+                {"label": field.label, "value": _stringify(args[field.arg_key]), "style": field.style}
+            )
+            used.add(field.arg_key)
+    for key, value in args.items():  # nothing that will run is hidden from the approver
+        if key not in used:
+            resolved.append(
+                {
+                    "label": key.replace("_", " ").title(),
+                    "value": _stringify(value),
+                    "style": "block" if len(str(value)) > 80 else "inline",
+                }
+            )
+    return {"icon": layout.icon, "title": layout.title, "fields": resolved}
+
+
+def _make_gated_tools_node(
+    tools: Sequence[BaseTool], is_write: WriteToolPredicate, layout_model=None
+):
     """The custom `tools` node for the "primitive" HITL mode: a hand-rolled ToolNode that pauses on
     write actions.
 
@@ -251,19 +311,26 @@ def _make_gated_tools_node(tools: Sequence[BaseTool], is_write: WriteToolPredica
         if writes:
             log.info("hitl.raised", question="approve workspace writes",
                      actions=[c["name"] for c in writes])
+            action_requests = []
+            for c in writes:
+                request = {
+                    "name": c["name"],
+                    "args": c["args"],
+                    "id": c["id"],
+                    "description": f"{c['name']}({json.dumps(c['args'], default=str)})",
+                }
+                # AI-author a polished approval layout (presentation only; values stay literal). Rides
+                # in the interrupt payload because the interrupt halts the node — there's no
+                # push_ui_message hook for it. Best-effort: None → the web client's literal fallback.
+                layout = await _author_approval_layout(layout_model, c["name"], c["args"])
+                if layout is not None:
+                    request["layout"] = layout
+                action_requests.append(request)
             raw = interrupt(
                 {
                     "kind": WORKSPACE_APPROVAL_KIND,
                     "question": "Approve these Google Workspace actions before Nora runs them?",
-                    "action_requests": [
-                        {
-                            "name": c["name"],
-                            "args": c["args"],
-                            "id": c["id"],
-                            "description": f"{c['name']}({json.dumps(c['args'], default=str)})",
-                        }
-                        for c in writes
-                    ],
+                    "action_requests": action_requests,
                 }
             )
             decisions = _normalize_decisions(raw, len(writes))  # exactly one per write, in order
@@ -323,12 +390,14 @@ def _compile_loop(model, tools: Sequence[BaseTool]):
     return builder.compile()
 
 
-def _compile_loop_gated(model, tools: Sequence[BaseTool], is_write: WriteToolPredicate):
+def _compile_loop_gated(
+    model, tools: Sequence[BaseTool], is_write: WriteToolPredicate, layout_model=None
+):
     """The "primitive" loop (path B): same shape, but the `tools` node is the hand-rolled gate that
-    pauses on write actions via `interrupt()`."""
+    pauses on write actions via `interrupt()` (and AI-authors the approval card via `layout_model`)."""
     builder = StateGraph(AnalyticsState)
     builder.add_node("llm", _make_llm_node(model.bind_tools(tools)))
-    builder.add_node("tools", _make_gated_tools_node(tools, is_write))
+    builder.add_node("tools", _make_gated_tools_node(tools, is_write, layout_model))
     builder.add_edge(START, "llm")
     builder.add_conditional_edges("llm", should_continue, ["tools", END])
     builder.add_edge("tools", "llm")
@@ -396,6 +465,7 @@ def build_workspace_agent(
     tools_provider: ToolsProvider | None = None,
     hitl: str | None = None,
     is_write: WriteToolPredicate | None = None,
+    layout_model=None,
 ):
     """Build the workspace capability runner.
 
@@ -408,7 +478,9 @@ def build_workspace_agent(
     tool list); by default the model is built from settings (lazily, so building the agent needs no
     provider key) and the tools come from the real (async) MCP client provider. `hitl` selects the
     approval mechanism (defaults to `settings.workspace_hitl`); `is_write` overrides the write-tool
-    predicate (injectable so tests can gate a custom fake tool name).
+    predicate (injectable so tests can gate a custom fake tool name). `layout_model` (the "primitive"
+    path only) AI-authors the approval card; None disables authoring (the web client falls back to a
+    literal card), so offline tests need no key.
     """
     settings = settings or get_settings()
     provider = tools_provider or _make_mcp_tools_provider(settings)
@@ -431,7 +503,7 @@ def build_workspace_agent(
         if mode == "middleware":
             agent = _compile_middleware_agent(_model, tools, write_pred)
         elif mode == "primitive":
-            agent = _compile_loop_gated(_model, tools, write_pred)
+            agent = _compile_loop_gated(_model, tools, write_pred, layout_model)
         else:
             agent = _compile_loop(_model, tools)
         # Drive the loop async: MCP tools are coroutine-only, and the orchestrator is already on the

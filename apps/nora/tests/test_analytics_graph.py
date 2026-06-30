@@ -81,13 +81,42 @@ def test_self_correction_loop():
     assert result["messages"][-1].content.startswith("The highest-revenue product")
 
 
-def test_loop_terminates_on_direct_answer():
-    """If the model answers without tools, the loop ends immediately."""
-    model = ScriptedChatModel([ai_final("42 orders.")])
+def test_query_guard_forces_a_query_after_a_narration():
+    """Headline fix for the trace bug: the model first NARRATES intent ("I'm going to check the sales
+    data…") with no tool call; the query guard loops back once, and on the nudge the model actually
+    calls run_sql — so the answer is grounded in a real query instead of an empty preamble."""
+    model = ScriptedChatModel(
+        [
+            ai_final("I'm going to check the sales data and report the top product."),  # narrate, no tool
+            ai_tool_call("run_sql", {"query": "SELECT name FROM products ORDER BY product_id LIMIT 1"}, "c1"),
+            ai_final("Your top product is Ceylon Cinnamon (Alba)."),
+        ]
+    )
     graph = build_analytics_graph(model=model)
-    result = graph.invoke({"messages": [HumanMessage(content="hi")]})
-    assert result["messages"][-1].content == "42 orders."
-    assert not any(isinstance(m, ToolMessage) for m in result["messages"])
+    result = graph.invoke({"messages": [HumanMessage(content="what's our best seller?")]})
+
+    ran_query = [m for m in result["messages"] if isinstance(m, ToolMessage) and m.name == "run_sql"]
+    assert ran_query, "the guard should have nudged the agent into actually querying"
+    assert "Ceylon Cinnamon" in result["messages"][-1].content
+
+
+def test_query_guard_bounds_to_one_nudge_then_terminates():
+    """The guard is bounded: a first tool-less reply is nudged ONCE; a second tool-less reply ends the
+    loop (no infinite nudging) — so a stubborn or genuinely no-data answer still terminates."""
+    model = ScriptedChatModel([ai_final("Let me look into that."), ai_final("42 orders.")])
+    graph = build_analytics_graph(model=model)
+    result = graph.invoke({"messages": [HumanMessage(content="how many orders?")]})
+    assert result["messages"][-1].content == "42 orders."  # ended on the second answer
+    assert not any(isinstance(m, ToolMessage) for m in result["messages"])  # never forced a fake query
+
+
+def test_query_guard_does_not_fire_after_a_tool_ran():
+    """No false nudge: a tool-less final answer that FOLLOWS real tool use is accepted as-is — the
+    guard only catches the 'never touched the DB' case, so a normal tool→answer turn isn't retried."""
+    model = ScriptedChatModel([ai_tool_call("list_tables", {}, "c1"), ai_final("We have 5 tables.")])
+    graph = build_analytics_graph(model=model)
+    result = graph.invoke({"messages": [HumanMessage(content="what tables exist?")]})
+    assert result["messages"][-1].content == "We have 5 tables."  # not nudged — a tool ran this turn
 
 
 def test_terminates_gracefully_at_step_budget():

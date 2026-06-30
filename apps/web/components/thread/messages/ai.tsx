@@ -458,34 +458,40 @@ function MessageBody({
         />
       ))}
 
-      {/* Actions sit on the message that carries the final text answer, not the tool steps. */}
-      {text && (
-        <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+      {/* Actions sit on the message that carries the final text answer. The row also renders for a
+          text-less message when it has alternate branches, so branch nav is never hidden. */}
+      {(text || (meta?.branchOptions?.length ?? 0) > 1) && (
+        <div className="flex items-center gap-1">
+          {/* Branch nav stays VISIBLE whenever alternates exist (regenerating forks a branch). */}
           <BranchSwitcher
             branch={meta?.branch}
             branchOptions={meta?.branchOptions}
             onSelect={(b) => stream.setBranch(b)}
             disabled={isLoading}
           />
-          <button
-            type="button"
-            title="Copy"
-            aria-label="Copy message"
-            onClick={copy}
-            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-          >
-            {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-          </button>
-          <button
-            type="button"
-            title="Regenerate"
-            aria-label="Regenerate response"
-            disabled={isLoading}
-            onClick={regenerate}
-            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
-          >
-            <RefreshCw className="size-3.5" />
-          </button>
+          <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+            {text && (
+              <button
+                type="button"
+                title="Copy"
+                aria-label="Copy message"
+                onClick={copy}
+                className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+              </button>
+            )}
+            <button
+              type="button"
+              title="Regenerate"
+              aria-label="Regenerate response"
+              disabled={isLoading}
+              onClick={regenerate}
+              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+            >
+              <RefreshCw className="size-3.5" />
+            </button>
+          </div>
         </div>
       )}
     </div>

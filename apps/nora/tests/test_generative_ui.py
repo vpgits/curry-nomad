@@ -202,7 +202,14 @@ def test_authored_ui_mode_pushes_an_a2ui_surface():
         supervisor_model=ScriptedChatModel(
             [ai_tool_call("to_analytics", {"task": "top sellers"}, "h1"), ai_final("")]
         ),
-        analytics_graph=build_analytics_graph(model=ScriptedChatModel([ai_final("Cinnamon leads.")])),
+        analytics_graph=build_analytics_graph(
+            model=ScriptedChatModel(
+                [
+                    ai_tool_call("run_sql", {"query": "SELECT 1 AS x"}, "c1"),  # engage the DB (query guard)
+                    ai_final("Cinnamon leads."),
+                ]
+            )
+        ),
         marketing_graph=object(),  # never invoked on an analytics turn
         # The dashboard node uses this model for BOTH the fixed dashboard and the authored surface;
         # here it returns an A2uiSurface (the authored-mode structured output).

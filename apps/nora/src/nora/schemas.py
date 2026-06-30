@@ -202,6 +202,29 @@ class A2uiSurface(BaseModel):
     blocks: list[A2uiBlock] = Field(default_factory=list)
 
 
+class ApprovalField(BaseModel):
+    """One field in an AI-authored HITL approval card. The model picks the `label` and which tool-call
+    argument supplies the value (`arg_key`) and how to show it (`style`) — but the VALUE itself is
+    filled from the literal tool args by code, never by the model. So the model authors the *layout*
+    while the approver always sees exactly what will run (faithful by construction)."""
+
+    label: str  # human label, e.g. "To", "Subject", "Body", "When"
+    arg_key: str  # which tool-call arg supplies the value (e.g. "to", "subject", "body")
+    style: Literal["inline", "block"] = "inline"  # inline = short value; block = long text (e.g. a body)
+
+
+class ApprovalLayout(BaseModel):
+    """An AI-authored layout for a pending workspace WRITE action's approval card. The model chooses
+    an icon, a short title, and an ordered set of fields appropriate to the action (send email →
+    To/Subject/Body; create event → Title/When/Attendees). Values are injected from the literal args,
+    and any arg the layout omits is appended by code, so nothing that will run is hidden. Flat optional
+    fields (no unions) for the same strict structured-output reason as A2uiBlock."""
+
+    icon: Literal["email", "calendar", "document", "generic"] = "generic"
+    title: str  # e.g. "Send email", "Draft email", "Create calendar event"
+    fields: list[ApprovalField] = Field(default_factory=list)
+
+
 # --- Runtime context (per-run; injected via context_schema) ---------------------------
 
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Literal
 
 from langchain.chat_models import init_chat_model
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.runtime import Runtime
@@ -53,9 +53,71 @@ def handle_sql_error(error: SqlError) -> str:
 
 
 def should_continue(state: AnalyticsState) -> Literal["tools", "__end__"]:
-    """Continue to the tools node iff the model asked for a tool; otherwise finish."""
+    """Continue to the tools node iff the model asked for a tool; otherwise finish.
+
+    (Kept as the plain router — `workspace/graph.py` reuses it. The analytics loop uses
+    `route_after_llm` below, which adds the 'engage the data before ending' guard.)"""
     last = state["messages"][-1]
     return "tools" if getattr(last, "tool_calls", None) else END
+
+
+# The names of the analytics tools that touch the database — used by the query guard to tell whether
+# the agent actually engaged the data this turn (vs. just narrating that it would).
+ANALYTICS_TOOL_NAMES = frozenset(tool.name for tool in ANALYTICS_TOOLS)
+
+# Appended to the system prompt on the one guard retry: the model gave a tool-less reply but never
+# queried — push it to actually use the tools instead of answering from memory or stating intent.
+QUERY_NUDGE = (
+    "You replied without using any tool, but never queried the database. If answering needs data, "
+    "call the tools now (describe_table to confirm names, then run_sql) and base your answer on the "
+    "real result — do not answer from memory or merely state that you are going to look. If the "
+    "question genuinely needs no data, answer it directly and concisely."
+)
+
+
+def _last_human_index(messages: list) -> int:
+    """Index of the most recent user message — the start of 'this turn'."""
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], HumanMessage):
+            return i
+    return -1
+
+
+def _used_tool_this_turn(messages: list) -> bool:
+    """Did the agent run any analytics (DB) tool since the latest user message? Scoped per-turn so a
+    prior turn's query doesn't mask this turn's 'never queried' failure."""
+    return any(
+        isinstance(m, ToolMessage) and getattr(m, "name", None) in ANALYTICS_TOOL_NAMES
+        for m in messages[_last_human_index(messages) + 1 :]
+    )
+
+
+def _bare_answers_this_turn(messages: list) -> int:
+    """Count tool-less AIMessage 'answers' since the latest user message — bounds the guard to a
+    single retry (so a genuine no-data answer, or a stubborn model, still terminates)."""
+    return sum(
+        1
+        for m in messages[_last_human_index(messages) + 1 :]
+        if isinstance(m, AIMessage) and not getattr(m, "tool_calls", None)
+    )
+
+
+def route_after_llm(state: AnalyticsState) -> Literal["tools", "llm", "__end__"]:
+    """Analytics router with a 'must engage the data before ending' guard.
+
+    Like `should_continue` (tool_calls → tools, else end) — but it catches the observed failure where
+    the model *narrates* intent ("I'm going to check the sales data…") and stops WITHOUT ever calling
+    a tool. On a tool-less reply, if no DB tool has run this turn, it loops back to `llm` once (the llm
+    node then appends `QUERY_NUDGE`). Bounded to a single retry and only fires when the agent never
+    touched the DB, so a normal query→answer turn is untouched and a stubborn/no-data answer still
+    terminates. Stateless — reads only messages since the last user turn."""
+    last = state["messages"][-1]
+    if getattr(last, "tool_calls", None):
+        return "tools"
+    if not _used_tool_this_turn(state["messages"]) and _bare_answers_this_turn(state["messages"]) <= 1:
+        log.info("analytics.query_nudge")
+        return "llm"
+    return END
 
 
 def build_analytics_graph(
@@ -111,6 +173,12 @@ def build_analytics_graph(
             items = runtime_store.search(DEFINITIONS, query=query, limit=3)
             definitions = "\n".join(item.value["text"] for item in items)
         system = build_system_prompt(table_names, settings, definitions=definitions)
+        # Query guard (see route_after_llm): if the model already gave a tool-less reply this turn but
+        # never touched the DB, it likely narrated intent and stopped — append the nudge so this retry
+        # actually uses the tools. The nudge lives in the ephemeral system prompt (rebuilt each call),
+        # so it never leaks into the shared `messages` channel.
+        if _bare_answers_this_turn(state["messages"]) >= 1 and not _used_tool_this_turn(state["messages"]):
+            system += "\n\n" + QUERY_NUDGE
         response = model_with_tools.invoke([SystemMessage(content=system), *state["messages"]])
         # Termination guard (mirrors the prebuilt create_agent): if the step budget is nearly spent
         # but the model still wants to call tools, stop with a plain answer instead of looping into a
@@ -132,7 +200,9 @@ def build_analytics_graph(
     builder.add_node("llm", llm_node)
     builder.add_node("tools", ToolNode(ANALYTICS_TOOLS, handle_tool_errors=handle_sql_error))
     builder.add_edge(START, "llm")
-    builder.add_conditional_edges("llm", should_continue, ["tools", END])
+    # route_after_llm adds the query guard: tool_calls → tools, a tool-less reply that never queried →
+    # back to "llm" once (with QUERY_NUDGE), otherwise END.
+    builder.add_conditional_edges("llm", route_after_llm, ["tools", "llm", END])
     builder.add_edge("tools", "llm")
     return builder.compile(checkpointer=checkpointer, store=store)
 

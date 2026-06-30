@@ -49,6 +49,16 @@ class Settings(BaseSettings):
     # --- Model layer (provider-agnostic config strings) ---
     model: str = "openai:gpt-4o"  # main reasoning model
     router_model: str = "openai:gpt-4o-mini"  # cheap classifier
+    # Reasoning effort for the supervisor/router model — opt-in, OpenAI gpt-5.x reasoning models only.
+    # Empty (default) = off: the router stays a cheap deterministic classifier (temperature=0),
+    # unchanged for the gpt-4o-mini default and every non-OpenAI provider. Set it (with
+    # NORA_ROUTER_MODEL pointed at a reasoning model, e.g. `openai:gpt-5.4`) to make the router *plan*
+    # its delegation with internal reasoning at this effort and emit an auto reasoning **summary** that
+    # rides into the trace (`output_version="responses/v1"` → the summary lands as a `reasoning` block
+    # on the model call). "medium" is the models' default level. Mirrors the analytics `thinking_budget`
+    # opt-in — a separate knob because reasoning config is provider-specific. Needs an org verified with
+    # OpenAI to generate summaries.
+    router_reasoning_effort: Literal["", "minimal", "low", "medium", "high", "xhigh"] = ""  # NORA_ROUTER_REASONING_EFFORT
     embedding_model: str = "openai:text-embedding-3-small"  # Store index embedder
     embedding_dims: int = 1536  # must match the embedding model
     # Optional Anthropic extended-thinking budget for the analytics agent (NORA_THINKING_BUDGET).

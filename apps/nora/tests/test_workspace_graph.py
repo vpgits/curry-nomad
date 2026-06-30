@@ -365,6 +365,51 @@ def test_workspace_middleware_hitl_self_corrects_on_tool_error():
     assert "couldn't send it" in resumed["messages"][-1].content
 
 
+# --- AI-authored approval layout (presentation by the model, values stay literal) -----------------
+
+
+def test_author_approval_layout_keeps_values_literal_and_hides_nothing():
+    """The model authors the LAYOUT (icon/title/labels/order via arg_keys); code fills each value from
+    the LITERAL args — the model never supplies the text, so the approver sees exactly what will run.
+    An arg the layout omits is still appended (nothing that will be sent is hidden)."""
+    from nora.schemas import ApprovalField, ApprovalLayout
+    from nora.workspace.graph import _author_approval_layout
+
+    class _FakeLayoutModel:
+        def with_structured_output(self, schema):
+            assert schema is ApprovalLayout
+
+            class _Runnable:
+                async def ainvoke(self, _messages):
+                    return ApprovalLayout(
+                        icon="email",
+                        title="Draft email",
+                        fields=[
+                            ApprovalField(label="To", arg_key="to"),
+                            ApprovalField(label="Body", arg_key="body", style="block"),
+                        ],
+                    )
+
+            return _Runnable()
+
+    args = {"to": "a@b.com", "subject": "Hi", "body": "A long body of text"}
+    layout = asyncio.run(_author_approval_layout(_FakeLayoutModel(), "draft_gmail_message", args))
+
+    assert layout["icon"] == "email" and layout["title"] == "Draft email"
+    by_label = {f["label"]: f for f in layout["fields"]}
+    assert by_label["To"]["value"] == "a@b.com"  # literal arg — the model only named the key
+    assert by_label["Body"]["value"] == "A long body of text" and by_label["Body"]["style"] == "block"
+    assert by_label["Subject"]["value"] == "Hi"  # uncovered arg appended → nothing hidden from approver
+
+
+def test_author_approval_layout_is_none_without_a_model():
+    """No layout model (the middleware path, or no provider key) → None, and the web client renders its
+    own literal fallback card. Best-effort, so offline tests need no key."""
+    from nora.workspace.graph import _author_approval_layout
+
+    assert asyncio.run(_author_approval_layout(None, "send_gmail_message", {"to": "x@y.com"})) is None
+
+
 def test_workspace_degrades_without_a_token():
     """No per-run Google token (operator hasn't connected) → a friendly 'connect' reply, no crash,
     and the agent/tools are never invoked."""

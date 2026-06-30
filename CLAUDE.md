@@ -89,6 +89,19 @@ the web UI as a collapsible "reasoning" card next to the tool steps (`analytics/
 model with `thinking=` + `temperature=1`; the frontend pulls it via `getReasoningString`). Default
 `0` = off, so the gpt-4o path (which emits no reasoning) is unchanged.
 
+**Supervisor reasoning (opt-in).** Set `NORA_ROUTER_REASONING_EFFORT` (`low`/`medium`/`high`/…) *and*
+point `NORA_ROUTER_MODEL` at an OpenAI gpt-5.x reasoning model to make the **router** plan its
+delegation with internal reasoning instead of the cheap `temperature=0` classifier. `_build_supervisor_model`
+then builds it with `reasoning={effort, summary:"auto"}` + `output_version="responses/v1"` (the
+OpenAI Responses API; no temperature — reasoning models reject a non-default one), so an auto reasoning
+**summary** lands as a `reasoning` content block on the model call and rides into the trace. The
+supervisor node then calls `_strip_reasoning` on the message before it re-enters the **shared**
+`messages` channel: the summary is already captured on the generation (trace), and leaving the
+reasoning item in a channel re-read by the next router hop AND every capability (each a fresh, possibly
+non-OpenAI call) would replay it as a dangling item — the `reasoning without its required following
+item` 400. Default `""` = off, so the gpt-4o-mini classifier path is unchanged. (Summaries need an
+OpenAI-verified org.)
+
 ### Web stack (optional)
 ```bash
 uv run --extra aegra aegra dev                    # serve the `nora` graph over the Agent Protocol on :2026 (Postgres via Docker; needs OPENAI_API_KEY)
@@ -270,7 +283,14 @@ point traces the whole orchestrator via the `config` pass-through) and flushes b
 the stack with `docker-compose.langfuse.yml` (UI on :3001). The **full web app** traces via
 Aegra's OpenTelemetry instrumentation — set `OTEL_TARGETS=LANGFUSE` + `LANGFUSE_BASE_URL` (or any
 OTLP backend) and runs group by thread in the Sessions view; `LANGSMITH_TRACING=true` still works
-at the LangChain level. The **eval runner** (`evals/run_evals.py`) traces the same way *auto-on*
+at the LangChain level. **Conversation continuity:** one user turn = one trace; turns are grouped
+into one **Langfuse session** keyed by `thread_id` — *the session IS the conversation*. The CLI sets
+this explicitly (`langfuse_session_id = thread_id`, and each turn's `langfuse_trace_name` is its
+message so the Sessions view reads like the chat); on the web path Aegra's OTEL does the session
+grouping automatically (the per-turn trace *name* is owned by that OTEL layer — the SDK's `submit`
+config only carries `configurable`, so it can't be set from the client). Forks/branches (edit /
+regenerate / branch-switch) work end-to-end in the app via the SDK's checkpoint forking, but a
+Langfuse session is a **flat** list of turn-traces — it does not render the branch tree. The **eval runner** (`evals/run_evals.py`) traces the same way *auto-on*
 (no flag): when `LANGFUSE_PUBLIC_KEY` is set, each item is traced under a per-suite session and the
 metrics it already computes are attached to that trace as Langfuse **scores** via
 `score_trace()` — deterministic checks (`eval-correct`, `eval-valid-sql`, `eval-recovered`,
