@@ -31,19 +31,29 @@ export function HumanMessage({ message, isLoading }: { message: Message; isLoadi
       toast.error("Can't edit this turn — its checkpoint hasn't loaded yet. Try again in a moment.");
       return;
     }
+    // Give the edited turn a FRESH id — do NOT reuse message.id. The edit forks a sibling off the
+    // same parent_checkpoint, so reusing the id means BOTH the original and the edited human message
+    // carry it. getMessagesMetadata resolves a message's branch via `findLast(history, …includes(id))`,
+    // which matches the OLDEST occurrence — i.e. the original (now-inactive) branch's checkpoint. That
+    // checkpoint isn't on the active branch path, so `branchByCheckpoint` misses, branchOptions comes
+    // back undefined, and the version switcher never renders on the edited bubble. A unique id is only
+    // present in the edited branch, so firstSeenState lands on the active branch and the switcher shows.
+    const newId = crypto.randomUUID();
     // Re-submit from the checkpoint before this turn → forks a new branch (the "edit" UX).
     stream.submit(
-      { messages: [{ type: "human", content: text, id: message.id }] },
+      { messages: [{ type: "human", content: text, id: newId }] },
       {
         checkpoint: parentCheckpoint,
         streamMode: ["values"],
         optimisticValues: (prev) => {
           const prevMessages = prev.messages ?? [];
+          // Locate the truncation point by the ORIGINAL id (that's what's in `prev`), then drop it and
+          // everything after, and append the edited turn under its new id.
           const idx = prevMessages.findIndex((m) => m.id === message.id);
           const kept = idx === -1 ? prevMessages : prevMessages.slice(0, idx);
           return {
             ...prev,
-            messages: [...kept, { type: "human", content: text, id: message.id } as Message],
+            messages: [...kept, { type: "human", content: text, id: newId } as Message],
           };
         },
       },
