@@ -16,7 +16,7 @@ import { isWorkspaceApproval } from "@/lib/types";
 import type { ThreadInterrupt } from "@/lib/types";
 import { AUTH_REQUIRED, WORKSPACE_ENABLED } from "@/lib/config";
 import { cn } from "@/lib/utils";
-import { getWorkspaceAccessToken } from "@/lib/workspace-client";
+import { buildSubmitConfig, AUTHOR_UI_KEY } from "@/lib/run-config";
 import { useStreamContext } from "@/providers/Stream";
 import { SignInGate } from "@/components/auth/sign-in-gate";
 import { WorkspaceConnect } from "@/components/workspace/workspace-connect";
@@ -79,7 +79,7 @@ export function Thread() {
   // navigating between threads instead of silently resetting. It's an on-demand per-run rendering
   // choice: when on, each message you send asks the analytics path to COMPOSE a custom UI surface
   // (config.configurable.ui_mode="authored") instead of the fixed dashboard, until you turn it off.
-  const [authorUi, setAuthorUi] = useLocalStorageBoolean("nora.authorUi", false);
+  const [authorUi, setAuthorUi] = useLocalStorageBoolean(AUTHOR_UI_KEY, false);
   const [input, setInput] = useState("");
   const { status } = useSession();
 
@@ -96,20 +96,13 @@ export function Thread() {
     const content = text.trim();
     if (!content) return;
     setInput("");
-    // Per-run config rides in config.configurable. Two independent keys can land here:
-    //   - google_access_token: the Workspace capability's per-run Google token (when enabled +
-    //     connected); the backend `workspace` node reads it, other capabilities ignore it.
-    //   - ui_mode: "authored" when the "Author UI" toggle is on, so the analytics path composes an
-    //     A2UI surface instead of the fixed dashboard.
-    // Merge both under one configurable object so neither clobbers the other.
-    const googleToken = WORKSPACE_ENABLED ? await getWorkspaceAccessToken() : null;
-    const configurable: Record<string, unknown> = {};
-    if (googleToken) configurable.google_access_token = googleToken;
-    if (authorUi) configurable.ui_mode = "authored";
+    // The per-run config (Google token + Author-UI mode) is built by the shared seam so this path
+    // and edit / regenerate / HITL-resume all attach it identically — see lib/run-config.ts.
     // NOTE (tracing): the Langfuse Sessions view already groups this thread's turns by thread_id
     // automatically (Aegra's OTEL instrumentation sets the session). Per-turn trace *naming* /tags
     // can't be set from here — the SDK's submit `config` only carries `configurable`, and the trace
     // attributes are owned by Aegra's OTEL layer. The CLI path (app.py) names turns by message.
+    const runConfig = await buildSubmitConfig();
     stream.submit(
       { messages: [{ type: "human", content }] },
       {
@@ -117,7 +110,7 @@ export function Thread() {
         // Stream the analytics agent subgraph's messages too — its run_sql steps and the final
         // answer flow in live (the subgraph is a real node in the orchestrator graph).
         streamSubgraphs: true,
-        ...(Object.keys(configurable).length > 0 ? { config: { configurable } } : {}),
+        ...runConfig,
         optimisticValues: (prev) => ({
           ...prev,
           messages: [

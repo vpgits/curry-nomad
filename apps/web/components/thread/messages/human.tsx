@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { getContentString } from "@/lib/utils";
+import { buildSubmitConfig } from "@/lib/run-config";
 import { useStreamContext } from "@/providers/Stream";
 import { BranchSwitcher } from "./shared";
 
@@ -20,7 +21,7 @@ export function HumanMessage({ message, isLoading }: { message: Message; isLoadi
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(content);
 
-  const submitEdit = () => {
+  const submitEdit = async () => {
     const text = value.trim();
     if (!text) return;
     // Without the fork checkpoint, stream.submit would run from HEAD and silently APPEND the edit at
@@ -39,12 +40,16 @@ export function HumanMessage({ message, isLoading }: { message: Message; isLoadi
     // back undefined, and the version switcher never renders on the edited bubble. A unique id is only
     // present in the edited branch, so firstSeenState lands on the active branch and the switcher shows.
     const newId = crypto.randomUUID();
+    // Carry the per-run config (Google token + Author-UI mode) so editing a workspace turn doesn't
+    // run tokenless and degrade to the "connect" stub — see lib/run-config.ts.
+    const runConfig = await buildSubmitConfig();
     // Re-submit from the checkpoint before this turn → forks a new branch (the "edit" UX).
     stream.submit(
       { messages: [{ type: "human", content: text, id: newId }] },
       {
         checkpoint: parentCheckpoint,
         streamMode: ["values"],
+        ...runConfig,
         optimisticValues: (prev) => {
           const prevMessages = prev.messages ?? [];
           // Locate the truncation point by the ORIGINAL id (that's what's in `prev`), then drop it and

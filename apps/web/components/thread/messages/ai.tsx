@@ -27,6 +27,7 @@ import { StoryboardFilmstrip } from "@/components/StoryboardFilmstrip";
 import { VideoBriefCard } from "@/components/VideoBriefCard";
 import { WorkspaceActionsCard } from "@/components/workspace/workspace-actions-card";
 import { cn, getContentString, getReasoningString } from "@/lib/utils";
+import { buildSubmitConfig } from "@/lib/run-config";
 import { useStreamContext } from "@/providers/Stream";
 import { MarkdownText } from "../markdown";
 import { BranchSwitcher } from "./shared";
@@ -418,7 +419,7 @@ function MessageBody({
     });
   };
 
-  const regenerate = () => {
+  const regenerate = async () => {
     // Without the fork checkpoint, this would run from HEAD and append a new turn at the end instead
     // of regenerating THIS one as an alternate branch. Bail loudly. (If it fires, the turn's
     // checkpoint isn't in the fetched history — see fetchStateHistory in providers/Stream.tsx.)
@@ -426,10 +427,14 @@ function MessageBody({
       toast.error("Can't regenerate this turn — its checkpoint hasn't loaded yet. Try again in a moment.");
       return;
     }
+    // Carry the per-run config (Google token + Author-UI mode) so regenerating a workspace turn
+    // doesn't run tokenless and degrade to the "connect" stub — see lib/run-config.ts.
+    const runConfig = await buildSubmitConfig();
     stream.submit(undefined, {
       checkpoint: parentCheckpoint,
       streamMode: ["values"],
       streamSubgraphs: true,
+      ...runConfig,
     });
   };
 
