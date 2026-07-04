@@ -141,20 +141,21 @@ def build_analytics_graph(
         # (the user-facing answer streams token-by-token); the client opts into nested-graph messages
         # with `streamSubgraphs: true`. (The router/dashboard/marketing models set disable_streaming
         # — their calls never become user-facing text; see orchestrator.py.)
-        if settings.thinking_budget > 0 and settings.model.startswith("anthropic:"):
+        model_id = settings.model_for("analytics")  # per-node override, else the base `model`
+        if settings.thinking_budget > 0 and model_id.startswith("anthropic:"):
             # Opt-in (NORA_THINKING_BUDGET): surface the agent's reasoning chain in the chat. With
             # Anthropic extended thinking, each AIMessage carries `thinking` content blocks that
             # stream inline next to the tool steps. Thinking requires temperature=1 (no 0), and
             # max_tokens must exceed the thinking budget — so we size it above the budget.
             model = init_chat_model(
-                settings.model,
+                model_id,
                 temperature=1,
                 streaming=True,
                 max_tokens=settings.thinking_budget + 4096,
                 thinking={"type": "enabled", "budget_tokens": settings.thinking_budget},
             )
         else:
-            model = init_chat_model(settings.model, temperature=0, streaming=True)
+            model = init_chat_model(model_id, temperature=0, streaming=True)
     model_with_tools = model.bind_tools(ANALYTICS_TOOLS)
 
     # The table list is static for a given DB; fetch it once at build time.

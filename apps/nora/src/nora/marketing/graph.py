@@ -70,7 +70,9 @@ def build_marketing_graph(
         # Aegra's `messages` stream would surface those internal calls' deltas as phantom partial
         # messages in the useStream UI, so the marketing path stays off the token stream too. No
         # UX cost — nothing here is streamed to the user. See orchestrator.py for the full rationale.
-        model = init_chat_model(settings.model, temperature=0.7, disable_streaming=True)
+        model = init_chat_model(
+            settings.model_for("marketing"), temperature=0.7, disable_streaming=True
+        )
     if spice_db is None:
         spice_db = build_spice_db(settings)
 

@@ -366,7 +366,9 @@ def build_orchestrator(
         # the supervisor (above). Construction needs a provider key; without one (e.g. offline tests
         # that don't inject a fake) we simply disable the dashboard — never the text answer.
         try:
-            dashboard_model = init_chat_model(settings.model, temperature=0, disable_streaming=True)
+            dashboard_model = init_chat_model(
+                settings.model_for("dashboard"), temperature=0, disable_streaming=True
+            )
         except Exception:  # noqa: BLE001 — no key → dashboards off, the rest of the app still runs
             dashboard_model = None
     if workspace_agent is None and settings.workspace_enabled:

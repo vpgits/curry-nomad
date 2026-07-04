@@ -61,6 +61,17 @@ class Settings(BaseSettings):
     router_reasoning_effort: Literal["", "minimal", "low", "medium", "high", "xhigh"] = ""  # NORA_ROUTER_REASONING_EFFORT
     embedding_model: str = "openai:text-embedding-3-small"  # Store index embedder
     embedding_dims: int = 1536  # must match the embedding model
+    # --- Per-node model overrides (each empty by default → falls back to `model`) ---
+    # Run a different model for a single capability without changing the base `model` — e.g. a strong
+    # reasoning model for analytics' SQL loop, a cheap one for the dashboard card. Resolve them via
+    # `model_for(node)` (below); empty = use `model`, so existing single-model setups are unchanged.
+    # The SUPERVISOR is configured separately, via `router_model` above (historically the cheap
+    # classifier, and the one node with its own reasoning-effort knob) — it is deliberately NOT routed
+    # through `model_for`. So to run the supervisor on the strong model, set NORA_ROUTER_MODEL.
+    analytics_model: str = ""  # NORA_ANALYTICS_MODEL — the analytics SQL agent (tool loop)
+    marketing_model: str = ""  # NORA_MARKETING_MODEL — the marketing workflow's creative model
+    workspace_model: str = ""  # NORA_WORKSPACE_MODEL — the Gmail/Calendar agent
+    dashboard_model: str = ""  # NORA_DASHBOARD_MODEL — gen-UI dashboard / a2ui author / approval-card layout
     # Optional Anthropic extended-thinking budget for the analytics agent (NORA_THINKING_BUDGET).
     # 0 = off (the default keeps gpt-4o behaviour unchanged). When > 0 *and* the analytics model is
     # an Anthropic one, the agent enables extended thinking with this token budget, so its reasoning
@@ -138,6 +149,18 @@ class Settings(BaseSettings):
     # text→video, since OpenRouter can't reach a localhost media URL.
     media_dir: Path = _DEFAULT_MEDIA_DIR
     media_public_base_url: str | None = None  # e.g. an ngrok/deploy origin that serves /media
+
+    def model_for(self, node: Literal["analytics", "marketing", "workspace", "dashboard"]) -> str:
+        """The `provider:model` string for one LLM node, falling back to the base `model` when that
+        node's override is empty. Lets each capability run its own model (see the per-node override
+        fields above). The supervisor is the deliberate exception — it uses `router_model`, built in
+        orchestrator.py:_build_supervisor_model — so it's intentionally not routed through here."""
+        return {
+            "analytics": self.analytics_model,
+            "marketing": self.marketing_model,
+            "workspace": self.workspace_model,
+            "dashboard": self.dashboard_model,
+        }[node] or self.model
 
 
 @lru_cache(maxsize=1)

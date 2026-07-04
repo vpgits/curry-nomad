@@ -512,7 +512,7 @@ def build_workspace_agent(
     async def arun(messages: list, *, access_token: str, config=None) -> list[BaseMessage]:
         nonlocal _model
         if _model is None:
-            _model = init_chat_model(settings.model, temperature=0, streaming=True)
+            _model = init_chat_model(settings.model_for("workspace"), temperature=0, streaming=True)
         # The provider may be sync (a test fake returning a list) or async (the real one, which
         # awaits load_mcp_tools) — await it only if it handed back a coroutine.
         tools = provider(access_token=access_token)
