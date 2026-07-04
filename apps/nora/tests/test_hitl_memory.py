@@ -17,7 +17,7 @@ from langgraph.types import Command
 
 from nora.analytics.graph import build_analytics_graph
 from nora.marketing.graph import build_marketing_graph, initial_marketing_state
-from nora.memory import DEFINITIONS, seed_brand_knowledge
+from nora.memory import GLOBAL_DEFINITIONS, seed_brand_knowledge
 from nora.schemas import VideoBrief
 from tests.fakes import ScriptedChatModel, ai_final, ai_tool_call
 from tests.test_marketing_graph import _passing_model
@@ -93,17 +93,17 @@ def test_interrupt_requires_a_thread_id():
 def test_seed_brand_knowledge_populates_both_namespaces():
     store = InMemoryStore()
     seed_brand_knowledge(store)
-    from nora.memory import BRAND
+    from nora.memory import GLOBAL_BRAND
 
-    assert store.search(BRAND, query="voice")
-    assert store.search(DEFINITIONS, query="revenue")
+    assert store.search(GLOBAL_BRAND, query="voice")
+    assert store.search(GLOBAL_DEFINITIONS, query="revenue")
 
 
 def test_analytics_injects_store_definitions_into_prompt():
     """A metric definition in the Store must reach the analytics system prompt (the wiring
     that lets memory shape the SQL). Verified offline via a no-index store + capturing model."""
     store = InMemoryStore()
-    store.put(DEFINITIONS, "revenue", {"text": "MAGIC_REVENUE_RULE net of refunds"})
+    store.put(GLOBAL_DEFINITIONS, "revenue", {"text": "MAGIC_REVENUE_RULE net of refunds"})
     model = ScriptedChatModel([ai_tool_call("list_tables", {}, "c1"), ai_final("done")])  # engage DB (query guard)
     graph = build_analytics_graph(model=model, store=store)
 
@@ -119,7 +119,9 @@ def test_brand_voice_from_store_reaches_the_script_prompt():
     """Brand voice placed in the Store must flow through load_brand into the script prompt
     (the wiring behind 'brand voice visibly shapes the generated script')."""
     store = InMemoryStore()
-    store.put(("curry_nomad", "brand"), "voice", {"text": "MAGIC_BRAND_VOICE cheeky and proud"})
+    from nora.memory import GLOBAL_BRAND
+
+    store.put(GLOBAL_BRAND, "voice", {"text": "MAGIC_BRAND_VOICE cheeky and proud"})
     model = _passing_model()
     graph = build_marketing_graph(
         model=model, store=store, checkpointer=InMemorySaver(), auto_approve=True

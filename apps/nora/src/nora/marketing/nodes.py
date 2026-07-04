@@ -99,9 +99,9 @@ def make_load_brand(settings: Settings):
         voice = prompts.DEFAULT_BRAND_VOICE
         store = getattr(runtime, "store", None)
         if store is not None:
-            from nora.memory import BRAND
+            from nora.memory import GLOBAL_BRAND
 
-            items = store.search(BRAND, query="brand voice, tone and style", limit=3)
+            items = store.search(GLOBAL_BRAND, query="brand voice, tone and style", limit=3)
             if items:
                 voice = "\n".join(i.value["text"] for i in items)
         return {"brand_voice": voice}

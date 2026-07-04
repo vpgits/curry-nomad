@@ -230,5 +230,8 @@ class ApprovalLayout(BaseModel):
 
 @dataclass
 class Context:
-    user_id: str = "arun"  # single demo user; namespaces the store
+    # Operator identity is NOT carried here — it comes from the server-injected auth object via
+    # `memory.resolve_user_id` (never a client-settable field). The old `user_id` default lived here
+    # with a "namespaces the store" comment but was dead code; namespacing is done from the verified
+    # identity, full stop.
     model: str | None = None  # optional per-run model override

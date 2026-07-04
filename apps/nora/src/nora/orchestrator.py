@@ -658,8 +658,9 @@ def make_graph():
     The platform provides persistence — the Postgres checkpointer (so HITL interrupts persist
     and resume) and the semantic Store (configured under `store.index` in aegra.json). So we
     compile WITHOUT our own: the platform injects them at runtime, and the store propagates into
-    the analytics/marketing subgraphs. Seed the Store's brand voice + metric definitions once
-    after the server is up with `apps/nora/scripts/seed_store.py`.
+    the analytics/marketing subgraphs. Seed the Store's GLOBAL brand voice + metric definitions once
+    with `apps/nora/scripts/seed_global.py` (writes straight to Postgres, so the raw in-graph read
+    finds them — a REST seed would land under users/<id> and never match).
 
     (The CLI in `app.py` is the self-contained path — it builds and seeds its own in-memory
     checkpointer + Store.) Requires provider keys in the environment (it builds real models)."""

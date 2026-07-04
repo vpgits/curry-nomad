@@ -22,7 +22,7 @@ from langgraph.runtime import Runtime
 from nora.analytics.prompts import build_system_prompt
 from nora.analytics.tools import ANALYTICS_TOOLS, _get_db
 from nora.config import Settings, get_settings
-from nora.memory import DEFINITIONS
+from nora.memory import GLOBAL_DEFINITIONS, MEMORY_TOOLS
 from nora.observability import get_logger
 from nora.services.interfaces import SqlError
 from nora.state import AnalyticsState
@@ -156,7 +156,11 @@ def build_analytics_graph(
             )
         else:
             model = init_chat_model(model_id, temperature=0, streaming=True)
-    model_with_tools = model.bind_tools(ANALYTICS_TOOLS)
+    # DB tools + per-user memory tools (save_memory / search_memory). The memory tools are kept OUT
+    # of ANALYTICS_TOOL_NAMES (module level) on purpose: that set feeds the query guard's "did the
+    # agent engage the DB this turn?" check, and a memory-tool call must NOT count as touching data.
+    agent_tools = [*ANALYTICS_TOOLS, *MEMORY_TOOLS]
+    model_with_tools = model.bind_tools(agent_tools)
 
     # The table list is static for a given DB; fetch it once at build time.
     table_names = _get_db().list_tables()
@@ -171,7 +175,7 @@ def build_analytics_graph(
         runtime_store = getattr(runtime, "store", None)
         if runtime_store is not None:
             query = _last_user_text(state["messages"]) or "metric definitions"
-            items = runtime_store.search(DEFINITIONS, query=query, limit=3)
+            items = runtime_store.search(GLOBAL_DEFINITIONS, query=query, limit=3)
             definitions = "\n".join(item.value["text"] for item in items)
         system = build_system_prompt(table_names, settings, definitions=definitions)
         # Query guard (see route_after_llm): if the model already gave a tool-less reply this turn but
@@ -199,7 +203,7 @@ def build_analytics_graph(
 
     builder = StateGraph(AnalyticsState)
     builder.add_node("llm", llm_node)
-    builder.add_node("tools", ToolNode(ANALYTICS_TOOLS, handle_tool_errors=handle_sql_error))
+    builder.add_node("tools", ToolNode(agent_tools, handle_tool_errors=handle_sql_error))
     builder.add_edge(START, "llm")
     # route_after_llm adds the query guard: tool_calls → tools, a tool-less reply that never queried →
     # back to "llm" once (with QUERY_NUDGE), otherwise END.

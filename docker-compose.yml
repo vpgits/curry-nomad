@@ -86,13 +86,19 @@ services:
       retries: 5
       start_period: 45s
 
-  # One-shot: seed brand voice + metric definitions into the running Store, then exit.
+  # One-shot: seed the GLOBAL memory tier (brand voice + metric definitions), then exit. Writes
+  # STRAIGHT to Postgres (not via Aegra's REST store, which would rewrite the namespace under
+  # users/<id> so the graph's raw read would miss it). Waits for aegra healthy so the store schema
+  # exists, then connects directly via DATABASE_URL. Embeds each value → needs OPENAI_API_KEY (.env).
   seed:
     image: curry-nomad-aegra:latest
     restart: "no"
-    command: ["python", "apps/nora/scripts/seed_store.py"]
+    env_file:
+      - path: .env
+        required: false
+    command: ["python", "apps/nora/scripts/seed_global.py"]
     environment:
-      NORA_API_URL: http://aegra:2026
+      DATABASE_URL: postgresql://${POSTGRES_USER:-aegra}:${POSTGRES_PASSWORD:-aegra}@postgres:5432/${POSTGRES_DB:-aegra}
     depends_on:
       aegra:
         condition: service_healthy
