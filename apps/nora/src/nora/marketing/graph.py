@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from langchain.chat_models import init_chat_model
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Send
+from langgraph.types import RetryPolicy, Send
 
 from nora.config import Settings, get_settings
 from nora.marketing import nodes
@@ -79,7 +79,9 @@ def build_marketing_graph(
     builder = StateGraph(MarketingState, context_schema=Context)
     builder.add_node("fetch_product", nodes.make_fetch_product(settings, spice_db))
     builder.add_node("load_brand", nodes.make_load_brand(settings))
-    builder.add_node("ideate", nodes.make_ideate(model, settings))
+    # ideate fans out N model calls via .batch inside one node; a RetryPolicy retries a single flaky
+    # call instead of failing the whole superstep (batch re-raises the first worker error otherwise).
+    builder.add_node("ideate", nodes.make_ideate(model, settings), retry_policy=RetryPolicy(max_attempts=3))
     builder.add_node("choose_concept", nodes.make_choose_concept(settings, auto_choose=auto_choose))
     builder.add_node("write_script", nodes.make_write_script(model, settings))
     builder.add_node("human_review", nodes.make_human_review(settings, auto_approve=auto_approve))

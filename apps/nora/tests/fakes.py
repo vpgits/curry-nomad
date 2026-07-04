@@ -64,6 +64,10 @@ class _StructuredRunnable:
         self._parent.record_prompt(str(prompt))
         return self._parent._next(self._schema)
 
+    def batch(self, prompts, config=None, **kwargs):  # noqa: ARG002
+        # Mirror Runnable.batch (order-preserving) — `ideate` fans out N concepts via .batch.
+        return [self.invoke(p, config=config) for p in prompts]
+
 
 class ScriptedStructuredModel:
     """A fake model for the marketing workflow.

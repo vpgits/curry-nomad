@@ -447,6 +447,12 @@ def _self_correcting(tool: BaseTool) -> BaseTool:
         name=tool.name,
         description=tool.description,
         args_schema=tool.args_schema,
+        # Carry the original tool's metadata forward so re-wrapping doesn't silently drop it — in
+        # particular `response_format` (MCP tools may return content_and_artifact) so artifacts survive.
+        metadata=getattr(tool, "metadata", None),
+        tags=getattr(tool, "tags", None),
+        return_direct=getattr(tool, "return_direct", False),
+        response_format=getattr(tool, "response_format", "content"),
     )
 
 

@@ -18,6 +18,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # The bundled DB lives next to this package, so the default path is correct no matter
@@ -44,6 +45,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,  # allow constructing by field name even when a field sets a validation_alias
     )
 
     # --- Model layer (provider-agnostic config strings) ---
@@ -132,7 +134,13 @@ class Settings(BaseSettings):
     # NORA_RENDERER=placeholder for no external calls / no spend (the offline suite pins this — see
     # tests/conftest.py). Every model/knob below is overridable.
     renderer: Literal["placeholder", "openrouter"] = "openrouter"
-    openrouter_api_key: str | None = None  # OPENROUTER_API_KEY; only used by the openrouter renderer
+    # Read from the UNPREFIXED OPENROUTER_API_KEY (what the comment/error name and users expect),
+    # with NORA_OPENROUTER_API_KEY as a fallback. A plain field would only load NORA_OPENROUTER_API_KEY
+    # (the env_prefix), so the documented OPENROUTER_API_KEY silently did nothing.
+    openrouter_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENROUTER_API_KEY", "NORA_OPENROUTER_API_KEY"),
+    )  # only used by the openrouter renderer
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     # Cheapest-tier defaults (see the OpenRouter model lists). Image gen is synchronous; video is an
     # async job (submit → poll). Both are `provider/model` ids on OpenRouter, not init_chat_model strings.

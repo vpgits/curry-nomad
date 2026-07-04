@@ -13,7 +13,6 @@ carries the finishing copy. They're implementation details, not part of the publ
 from __future__ import annotations
 
 import json
-from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 
 from langgraph.runtime import Runtime
@@ -112,21 +111,22 @@ def make_load_brand(settings: Settings):
 def make_ideate(model, settings: Settings):
     """Generate `marketing_num_concepts` concepts IN PARALLEL (parallelization within a node).
 
-    The calls are I/O-bound model invocations, so a thread pool gives real concurrency.
-    `executor.map` preserves input order, so concept[i] always corresponds to angle seed i.
+    Uses `with_structured_output(...).batch(prompts, config=config)` rather than a hand-rolled
+    ThreadPoolExecutor: `.batch` runs the I/O-bound calls concurrently in LangChain's own executor,
+    preserves input order (concept[i] ← angle seed i), and — crucially — PROPAGATES the run `config`
+    (callbacks/run-tree) into the child calls, so each concept generation nests under this run in the
+    trace instead of escaping as a detached session-less trace (the raw thread pool dropped the
+    context, since OpenTelemetry's span context is thread-local). The `ideate` graph node also carries
+    a RetryPolicy (see graph.py), so a single flaky call is retried instead of failing the superstep.
     """
 
-    def ideate(state) -> dict:
+    def ideate(state, config) -> dict:
         facts = state["product_facts"]
         brand, request = state["brand_voice"], state["request"]
         n = settings.marketing_num_concepts
-
-        def one(i: int) -> ConceptIdea:
-            structured = model.with_structured_output(ConceptIdea)
-            return structured.invoke(prompts.ideate_prompt(brand, facts, request, i))
-
-        with ThreadPoolExecutor(max_workers=n) as executor:
-            concepts = list(executor.map(one, range(n)))
+        structured = model.with_structured_output(ConceptIdea)
+        seed_prompts = [prompts.ideate_prompt(brand, facts, request, i) for i in range(n)]
+        concepts = structured.batch(seed_prompts, config=config)
         log.info("marketing.ideate", concepts=len(concepts))
         return {"concepts": [c.model_dump() for c in concepts]}
 

@@ -297,7 +297,11 @@ def _build_supervisor_model(settings: Settings):
     partial messages on Aegra's `messages` stream. (The dashboard and marketing models disable
     streaming for the same reason; only the analytics agent streams — its tokens ARE the answer.)
     """
-    if settings.router_reasoning_effort:
+    # Only take the reasoning path for an OpenAI model — `reasoning=`/`use_responses_api=` are
+    # OpenAI-specific and a non-OpenAI provider rejects them at call time, which would make EVERY
+    # supervisor.invoke raise and degrade the whole conversation to the clarify reply. If effort is
+    # set against a non-OpenAI router model, fall back to the plain classifier instead of dying.
+    if settings.router_reasoning_effort and settings.router_model.startswith("openai:"):
         return init_chat_model(
             settings.router_model,
             reasoning={"effort": settings.router_reasoning_effort, "summary": "auto"},
@@ -305,6 +309,8 @@ def _build_supervisor_model(settings: Settings):
             use_responses_api=True,
             disable_streaming=True,
         )
+    if settings.router_reasoning_effort:
+        log.info("supervisor.reasoning_ignored", router_model=settings.router_model)
     return init_chat_model(settings.router_model, temperature=0, disable_streaming=True)
 
 
@@ -422,7 +428,9 @@ def build_orchestrator(
             # analytics->marketing chain, and the "I'll come back to it" ack was a lie). Dropping it
             # lets the model re-request it on the next hop, where it runs. (Also keeps _handoff_count at
             # one per hop instead of burning the cap on parallel calls.)
-            ai.tool_calls = [first]
+            # Copy (don't mutate the model's returned object in place); same id, so this is still the
+            # one AIMessage persisted for this hop, now carrying exactly the one acted-on tool_call.
+            ai = ai.model_copy(update={"tool_calls": [first]})
             ack = ToolMessage(content=f"Handing off to {target}.", tool_call_id=first["id"])
             args = first.get("args") or {}
             log.info("route.decided", capability=target, task=args.get("task"))
@@ -474,8 +482,11 @@ def build_orchestrator(
             if surface is None:
                 return {}
             data = surface.model_dump()
-            # Same id → add_messages updates the final message in place (no duplicate).
-            final.additional_kwargs = {**(final.additional_kwargs or {}), "a2ui_surface": data}
+            # Copy (don't mutate the state message in place); same id → add_messages replaces it and
+            # push_ui_message associates the card by that id.
+            final = final.model_copy(
+                update={"additional_kwargs": {**(final.additional_kwargs or {}), "a2ui_surface": data}}
+            )
             push_ui_message("a2ui_surface", data, message=final)
             return {"messages": [final]}
 
@@ -483,7 +494,9 @@ def build_orchestrator(
         if dashboard is None:
             return {}
         data = dashboard.model_dump()
-        final.additional_kwargs = {**(final.additional_kwargs or {}), "dashboard": data}
+        final = final.model_copy(
+            update={"additional_kwargs": {**(final.additional_kwargs or {}), "dashboard": data}}
+        )
         push_ui_message("analytics_dashboard", data, message=final)
         return {"messages": [final]}
 
