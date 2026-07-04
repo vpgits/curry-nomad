@@ -31,6 +31,7 @@ import { buildSubmitConfig } from "@/lib/run-config";
 import { useSubmitLock } from "@/lib/use-submit-lock";
 import { useStreamContext } from "@/providers/Stream";
 import { MarkdownText } from "../markdown";
+import { CardErrorBoundary } from "../card-error-boundary";
 import { BranchSwitcher } from "./shared";
 
 // Client-side component map for push_ui_message UI messages — LoadExternalComponent renders these
@@ -460,17 +461,26 @@ function MessageBody({
       )}
 
       {uiForMessage.map((ui) => (
-        <LoadExternalComponent
+        // Per-card boundary: a card that throws on a partial/streaming payload degrades to a small
+        // inline notice instead of unwinding to the page-root ChatErrorBoundary (h-dvh) and blanking
+        // the whole screen. resetKeys tracks the streamed props, so the card re-renders the moment
+        // complete data lands.
+        <CardErrorBoundary
           key={ui.id}
-          // Cast at the boundary: LoadExternalComponent's prop types are deliberately loose
-          // (Record<string, unknown> state, {}-prop components); our typed stream + dashboard
-          // component are stricter. Runtime behaviour is correct (ui.props → AnalyticsDashboard).
-          stream={stream as ComponentProps<typeof LoadExternalComponent>["stream"]}
-          message={ui}
-          components={
-            UI_COMPONENTS as unknown as ComponentProps<typeof LoadExternalComponent>["components"]
-          }
-        />
+          label={ui.name}
+          resetKeys={[JSON.stringify(ui.props ?? null)]}
+        >
+          <LoadExternalComponent
+            // Cast at the boundary: LoadExternalComponent's prop types are deliberately loose
+            // (Record<string, unknown> state, {}-prop components); our typed stream + dashboard
+            // component are stricter. Runtime behaviour is correct (ui.props → AnalyticsDashboard).
+            stream={stream as ComponentProps<typeof LoadExternalComponent>["stream"]}
+            message={ui}
+            components={
+              UI_COMPONENTS as unknown as ComponentProps<typeof LoadExternalComponent>["components"]
+            }
+          />
+        </CardErrorBoundary>
       ))}
 
       {/* Actions sit on the message that carries the final text answer. The row also renders for a

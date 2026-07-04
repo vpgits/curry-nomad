@@ -21,6 +21,7 @@ import { useStreamContext } from "@/providers/Stream";
 import { SignInGate } from "@/components/auth/sign-in-gate";
 import { WorkspaceConnect } from "@/components/workspace/workspace-connect";
 import { AskNoraModeLane } from "./AskNoraModeLane";
+import { CardErrorBoundary } from "./card-error-boundary";
 import { AssistantTurn, NoraAvatar } from "./messages/ai";
 import { HumanMessage } from "./messages/human";
 
@@ -302,11 +303,15 @@ function MessageList({
                   <HumanMessage message={turn.human} isLoading={isLoading} />
                 )}
                 {turn.ai.length > 0 && (
-                  <AssistantTurn
-                    messages={turn.ai}
-                    isLoading={isLoading}
-                    isActive={isLoading && idx === turns.length - 1}
-                  />
+                  // Per-turn boundary: a render error in one assistant turn (outside a gen-UI card)
+                  // degrades to an inline notice instead of blanking the whole /ask screen.
+                  <CardErrorBoundary label="this response" resetKeys={[turn.ai.length, isLoading]}>
+                    <AssistantTurn
+                      messages={turn.ai}
+                      isLoading={isLoading}
+                      isActive={isLoading && idx === turns.length - 1}
+                    />
+                  </CardErrorBoundary>
                 )}
               </Fragment>
             ))}
