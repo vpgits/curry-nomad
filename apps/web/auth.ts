@@ -29,9 +29,16 @@ export const { handlers, auth } = NextAuth({
       // scope threads to them. Exposed on the session so the client can attach it as a Bearer header
       // to Aegra calls (useStream defaultHeaders). It is identity ONLY — the Google Workspace access
       // token travels separately, per run (see components/thread + app/api/google/token).
+      //
+      // The subject MUST be STABLE across logins. Aegra scopes threads (and per-user memory) by this
+      // identity, so a value that changes per session silently ORPHANS the operator's whole history
+      // on every sign-out/in. With the JWT session strategy (no DB adapter), `token.sub` is a fresh
+      // random UUID minted on each sign-in — so we key on the operator's Google email instead (a fixed
+      // per-account value from the verified profile). Fall back to token.sub only if email is absent.
+      const subject = session.user?.email ?? token.sub;
       const key = new TextEncoder().encode(AUTH_SECRET);
       session.aegraToken = await new SignJWT({
-        sub: token.sub,
+        sub: subject,
         email: session.user?.email,
         name: session.user?.name,
       })
