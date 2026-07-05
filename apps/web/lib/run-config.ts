@@ -1,9 +1,9 @@
 import { WORKSPACE_ENABLED } from "./config";
 import { getWorkspaceAccessToken } from "./workspace-client";
 
-// localStorage key for the "Author UI" output-mode toggle (owned by the Thread component). Read here
-// too so EVERY submit path applies the pref — not just the chat bar.
-export const AUTHOR_UI_KEY = "nora.authorUi";
+// localStorage key for the "Author UI" output-mode preference. Module-private: it's now read only
+// here (in buildSubmitConfig), so every submit path applies the persisted pref.
+const AUTHOR_UI_KEY = "nora.authorUi";
 
 // The per-run config that EVERY submit must carry. Two independent keys ride in config.configurable:
 //   - google_access_token: the Workspace capability's per-run Google token (when enabled + connected).

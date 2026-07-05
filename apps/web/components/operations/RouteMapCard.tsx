@@ -22,15 +22,18 @@ export function RouteMapCard({
   route_id,
   status,
 }: RoutePlan) {
-  const [currentStatus, setCurrentStatus] = useState(status);
+  // Local optimistic override for the dispatch action only; the (live) `status` prop stays the
+  // source of truth, so a re-pushed card snapshot with a newer status isn't masked by stale local
+  // state that a `useState(status)` seed would freeze at mount.
+  const [dispatchedStatus, setDispatchedStatus] = useState<string | null>(null);
   const [dispatching, setDispatching] = useState(false);
-  const dispatched = currentStatus === "dispatched";
+  const dispatched = (dispatchedStatus ?? status) === "dispatched";
 
   const dispatch = async () => {
     setDispatching(true);
     try {
       const updated = await ops.dispatchRoute(route_id);
-      setCurrentStatus(updated.status);
+      setDispatchedStatus(updated.status);
       toast.success("Route dispatched");
     } catch (e) {
       toast.error("Couldn't dispatch route", {

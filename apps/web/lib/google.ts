@@ -53,7 +53,7 @@ export async function encryptTokens(tokens: GoogleTokens): Promise<string> {
     .encrypt(cookieKey());
 }
 
-export async function decryptTokens(value: string): Promise<GoogleTokens | null> {
+async function decryptTokens(value: string): Promise<GoogleTokens | null> {
   try {
     const { payload } = await jwtDecrypt(value, cookieKey());
     if (typeof payload.access_token !== "string") return null;
@@ -94,7 +94,7 @@ export async function exchangeCodeForTokens(code: string): Promise<GoogleTokens 
   };
 }
 
-export async function refreshAccessToken(refreshToken: string): Promise<GoogleTokens | null> {
+async function refreshAccessToken(refreshToken: string): Promise<GoogleTokens | null> {
   const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
