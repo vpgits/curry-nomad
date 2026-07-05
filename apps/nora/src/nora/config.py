@@ -36,6 +36,27 @@ _DEFAULT_OPS_DB_PATH = _PACKAGE_DIR / "data" / "runtime" / "operations.db"
 # writes it and the ops-api serves it at /media (same repo locally; a shared volume in Docker).
 _DEFAULT_MEDIA_DIR = _PACKAGE_DIR / "data" / "runtime" / "media"
 
+# Human-readable labels for the Google Workspace scopes, keyed (area, level). THE single source of
+# truth for describing the workspace capability: every prompt (router instructions, the workspace
+# agent's system prompt, the handoff-tool blurb) is DERIVED from `workspace_permissions` via
+# `Settings.workspace_scope_summary()`, so the descriptions can't drift out of sync with the real
+# grant — the staleness bug where the prompts advertised "Gmail + Calendar only" (Calendar wasn't even
+# granted) while Sheets/Docs/Drive/Tasks were, so the router refused to route spreadsheet requests.
+_WORKSPACE_SCOPE_LABELS: dict[tuple[str, str], str] = {
+    ("gmail", "send"): "Gmail (read, draft, and send email)",
+    ("gmail", "readonly"): "Gmail (read email)",
+    ("sheets", "full"): "Google Sheets (read and edit — create spreadsheets, add tabs, write values)",
+    ("sheets", "readonly"): "Google Sheets (read)",
+    ("docs", "full"): "Google Docs (read and edit)",
+    ("docs", "readonly"): "Google Docs (read)",
+    ("tasks", "full"): "Google Tasks (read and manage tasks)",
+    ("tasks", "readonly"): "Google Tasks (read)",
+    ("drive", "full"): "Google Drive (read and write files)",
+    ("drive", "readonly"): "Google Drive (read-only)",
+    ("calendar", "full"): "Google Calendar (read and create/modify events)",
+    ("calendar", "readonly"): "Google Calendar (read events)",
+}
+
 
 class Settings(BaseSettings):
     """Typed, env-driven configuration. `get_settings()` returns a cached singleton."""
@@ -49,8 +70,8 @@ class Settings(BaseSettings):
     )
 
     # --- Model layer (provider-agnostic config strings) ---
-    model: str = "openai:gpt-4o"  # main reasoning model
-    router_model: str = "openai:gpt-4o-mini"  # cheap classifier
+    model: str = "openai:gpt-5.4"  # main reasoning model
+    router_model: str = "openai:gpt-5.4"  # cheap classifier
     # Reasoning effort for the supervisor/router model — opt-in, OpenAI gpt-5.x reasoning models only.
     # Empty (default) = off: the router stays a cheap deterministic classifier (temperature=0),
     # unchanged for the gpt-4o-mini default and every non-OpenAI provider. Set it (with
@@ -117,7 +138,7 @@ class Settings(BaseSettings):
     workspace_mcp_url: str = "http://localhost:8001/mcp"
     # Informational echo of the scopes the demo grants; the real enforcement is the MCP server's
     # `--permissions` flag (and the OAuth consent the operator approves).
-    workspace_permissions: str = "gmail:send docs:full sheets:full tasks:full drive:readonly"
+    workspace_permissions: str = "gmail:send docs:full sheets:full tasks:full calendar:full drive:readonly"
 
     # --- Analytics tool guards ---
     max_sql_rows: int = 200  # LIMIT cap injected into run_sql
@@ -126,6 +147,15 @@ class Settings(BaseSettings):
     # --- Marketing workflow knobs ---
     marketing_max_revisions: int = 2  # evaluator-optimizer loop bound
     marketing_num_concepts: int = 3  # parallel ideation count
+    # Default Instagram-post size + caption verbosity. The operator adjusts both at the copy-review
+    # gate (a stepper 1-8 + concise/standard/detailed) and regenerates; these are just the seeds.
+    marketing_num_images: int = 4  # images per post (== on-screen-text lines); operator-adjustable
+    marketing_verbosity: str = "standard"  # caption verbosity: concise | standard | detailed
+    # Human-review gate on the generated stills, BEFORE the Instagram post is finalized (openrouter
+    # renderer only — the placeholder has no stills to review, so the gate auto-passes). Turn off to
+    # finalize the post straight from the stills with no pause.
+    stills_review_enabled: bool = True  # NORA_STILLS_REVIEW_ENABLED
+    stills_max_revisions: int = 3  # safety bound on the regenerate-stills loop
 
     # --- Rendering adapter ---
     # First-party: the real OpenRouter renderer by default. It needs an OPENROUTER_API_KEY to actually
@@ -142,21 +172,19 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("OPENROUTER_API_KEY", "NORA_OPENROUTER_API_KEY"),
     )  # only used by the openrouter renderer
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    # Cheapest-tier defaults (see the OpenRouter model lists). Image gen is synchronous; video is an
-    # async job (submit → poll). Both are `provider/model` ids on OpenRouter, not init_chat_model strings.
-    openrouter_image_model: str = "black-forest-labs/flux.2-flex"
-    openrouter_video_model: str = "google/veo-3.1-lite"
-    # Per-shot render knobs. Reels are vertical; keep duration/resolution small to bound spend.
-    render_aspect_ratio: str = "9:16"  # instagram_reel
+    # OpenRouter `provider/model` id for image generation (NOT an init_chat_model string). The
+    # default is a Google model because it serves under OpenRouter's DEFAULT data policy — Black
+    # Forest Labs' flux.* only routes through providers that need a relaxed policy
+    # (https://openrouter.ai/settings/privacy), so it 404s ("No endpoints matching your guardrail
+    # restrictions") out of the box. Cheaper models (e.g. flux.2-flex) work once that policy is
+    # relaxed; override via NORA_OPENROUTER_IMAGE_MODEL.
+    openrouter_image_model: str = "google/gemini-3.1-flash-image"
+    # Per-shot render knobs. Instagram posts are vertical; keep resolution small to bound spend.
+    render_aspect_ratio: str = "9:16"  # instagram post
     render_resolution: str = "720p"
-    render_video_duration_s: int = 6
-    render_generate_audio: bool = False  # audio adds cost/latency; off for the demo
-    render_max_shots: int = 4  # cap the number of shots rendered (cost guard)
-    # Where generated images are written, and the PUBLIC base URL OpenRouter can fetch them from for
-    # image→video first-frame conditioning. Unset (the local default) → the renderer falls back to
-    # text→video, since OpenRouter can't reach a localhost media URL.
+    render_max_shots: int = 8  # HARD safety cap on rendered stills; the per-post count is marketing_num_images
+    # Where generated images are written (served by the ops-api at /media).
     media_dir: Path = _DEFAULT_MEDIA_DIR
-    media_public_base_url: str | None = None  # e.g. an ngrok/deploy origin that serves /media
 
     def model_for(self, node: Literal["analytics", "marketing", "workspace", "dashboard"]) -> str:
         """The `provider:model` string for one LLM node, falling back to the base `model` when that
@@ -169,6 +197,27 @@ class Settings(BaseSettings):
             "workspace": self.workspace_model,
             "dashboard": self.dashboard_model,
         }[node] or self.model
+
+    def workspace_scope_summary(self) -> str:
+        """A human-readable summary of the Google Workspace scopes actually granted (parsed from
+        `workspace_permissions`). Every prompt that tells the router / workspace agent what the
+        capability can do is built from THIS, so the descriptions stay in lockstep with the real
+        grant instead of drifting (the "Gmail + Calendar only" staleness bug). Unknown scopes still
+        surface with a sane generic label, so adding a scope automatically widens the descriptions."""
+        parts: list[str] = []
+        for token in self.workspace_permissions.split():
+            area, _, level = token.partition(":")
+            if not area:
+                continue
+            label = _WORKSPACE_SCOPE_LABELS.get((area, level))
+            if label is None:
+                label = f"Google {area.replace('_', ' ').title()}" + (f" ({level})" if level else "")
+            parts.append(label)
+        if not parts:
+            return "the operator's Google account"
+        if len(parts) == 1:
+            return parts[0]
+        return ", ".join(parts[:-1]) + ", and " + parts[-1]
 
 
 @lru_cache(maxsize=1)

@@ -17,6 +17,7 @@ export const GOOGLE_WORKSPACE_SCOPES = [
   "https://www.googleapis.com/auth/documents", // edit Google Docs
   "https://www.googleapis.com/auth/spreadsheets", // edit Google Sheets
   "https://www.googleapis.com/auth/tasks", // manage Tasks
+  "https://www.googleapis.com/auth/calendar", // read + create/modify calendar events
   "https://www.googleapis.com/auth/drive.file", // create/open only the files the app touches
   "https://www.googleapis.com/auth/drive.readonly", // find/read existing Drive files
 ];

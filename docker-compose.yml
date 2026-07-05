@@ -146,12 +146,13 @@ services:
     # Tool surface exposed by the server. The real boundary is the OAuth scopes the operator grants
     # (apps/web/lib/google.ts) — a tool only succeeds if the bearer token carries its scope. Levels:
     # gmail readonly|organize|drafts|send|full (cumulative), tasks readonly|manage|full, others
-    # readonly|full. Matches the granted set: gmail.compose, documents, spreadsheets, tasks, drive.*.
+    # readonly|full. Matches the granted set: gmail.compose, documents, spreadsheets, tasks, calendar,
+    # drive.*.
     # The image's ENTRYPOINT is `/bin/sh -c`, so the command must be ONE shell string (not separate
     # flag args, which would hit sh directly → "Illegal option --"). Invokes the server the same way
     # the image's default CMD does (`uv run main.py …`), plus our --permissions.
     command:
-      - "uv run main.py --transport streamable-http --permissions gmail:send docs:full sheets:full tasks:full drive:readonly"
+      - "uv run main.py --transport streamable-http --permissions gmail:send docs:full sheets:full tasks:full calendar:full drive:readonly"
     environment:
       PORT: "8001"
       MCP_ENABLE_OAUTH21: "true"
