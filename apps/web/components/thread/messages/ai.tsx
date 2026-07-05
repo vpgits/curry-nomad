@@ -23,6 +23,7 @@ import { CritiqueCard } from "@/components/CritiqueCard";
 import { MarketingRenderCard } from "@/components/MarketingRenderCard";
 import { PostBriefCard } from "@/components/PostBriefCard";
 import { StoryboardFilmstrip } from "@/components/StoryboardFilmstrip";
+import { OpsActionsCard } from "@/components/operations/ops-actions-card";
 import { WorkspaceActionsCard } from "@/components/workspace/workspace-actions-card";
 import { cn, getContentString, getReasoningString } from "@/lib/utils";
 import { buildSubmitConfig } from "@/lib/run-config";
@@ -47,6 +48,7 @@ const UI_COMPONENTS = {
   marketing_critique: CritiqueCard,
   marketing_render: MarketingRenderCard,
   workspace_actions: WorkspaceActionsCard,
+  ops_actions: OpsActionsCard,
 };
 // ui.name values that mark a turn as the marketing workflow (drives the ModeChip).
 const MARKETING_UI = new Set([
@@ -66,10 +68,11 @@ export function NoraAvatar() {
   );
 }
 
-type TurnMode = "analytics" | "marketing" | "workspace";
+type TurnMode = "analytics" | "marketing" | "workspace" | "operations";
 
 // The mode chip beside "Nora": ink pill for the analytics agent, accent-tint pill for the marketing
-// workflow, info-tint for the workspace agent — the paradigms explicit at a glance.
+// workflow, info-tint for the workspace agent, success-tint for the operations agent — the paradigms
+// explicit at a glance.
 function ModeChip({ mode }: { mode: TurnMode }) {
   if (mode === "marketing")
     return (
@@ -81,6 +84,12 @@ function ModeChip({ mode }: { mode: TurnMode }) {
     return (
       <span className="rounded-full border border-info-edge bg-info-tint px-2 py-px text-[9.5px] font-semibold text-info-text">
         Workspace agent
+      </span>
+    );
+  if (mode === "operations")
+    return (
+      <span className="rounded-full border border-success-edge bg-success-tint px-2 py-px text-[9.5px] font-semibold text-success-text">
+        Operations agent
       </span>
     );
   return (
@@ -96,12 +105,13 @@ function ModeChip({ mode }: { mode: TurnMode }) {
 // supervisor→subagent boundary; every message after it (until the next handoff) belongs to that
 // subagent. We render the boundary as a DelegationBoundary and the subagent's run as a SubagentLane.
 
-type HandoffTarget = "analytics" | "marketing" | "workspace";
+type HandoffTarget = "analytics" | "marketing" | "workspace" | "operations";
 
 const HANDOFF_TARGETS: Record<string, HandoffTarget> = {
   to_analytics: "analytics",
   to_marketing: "marketing",
   to_workspace: "workspace",
+  to_operations: "operations",
 };
 
 // Per-target visual language (matches ModeChip): ink for analytics, brand tint for marketing, info
@@ -133,6 +143,14 @@ const TARGET: Record<
     accent: "text-info-text",
     badge: "border-info-edge bg-info-tint",
     badgeIcon: "text-info-text",
+  },
+  operations: {
+    label: "Operations agent",
+    pill: "border border-success-edge bg-success-tint text-success-text",
+    rail: "bg-success-edge",
+    accent: "text-success-text",
+    badge: "border-success-edge bg-success-tint",
+    badgeIcon: "text-success-text",
   },
 };
 
@@ -229,7 +247,9 @@ export function AssistantTurn({
       ? "marketing"
       : cards.some((ui) => ui.name === "workspace_actions")
         ? "workspace"
-        : null;
+        : cards.some((ui) => ui.name === "ops_actions")
+          ? "operations"
+          : null;
 
   return (
     <div className="flex items-start gap-3">

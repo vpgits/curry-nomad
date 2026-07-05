@@ -16,6 +16,10 @@ from pathlib import Path
 # so an explicit env still wins. Must run before the first get_settings().
 os.environ.setdefault("NORA_RENDERER", "placeholder")
 os.environ.setdefault("NORA_WORKSPACE_ENABLED", "false")
+# Operations is ON by default (first-party) and its agent writes the on-disk ops DB in-process — pin
+# it OFF for the suite so the default orchestrator uses the sync stub and no test touches the real DB;
+# the operations tests set operations_enabled=True and inject a store on a disposable temp DB.
+os.environ.setdefault("NORA_OPERATIONS_ENABLED", "false")
 
 import pytest  # noqa: E402 — imported after the env pins above
 

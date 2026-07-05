@@ -78,8 +78,22 @@ def to_workspace(task: str) -> str:
     return ""
 
 
-HANDOFF_TOOLS = [to_analytics, to_marketing, to_workspace]
-HANDOFF_TARGET = {"to_analytics": "analytics", "to_marketing": "marketing", "to_workspace": "workspace"}
+@tool
+def to_operations(task: str) -> str:
+    """Delegate to the operations agent: manage the business's own ORDERS, STOCK, and CUSTOMERS —
+    create / edit / cancel orders, receive or adjust stock, and add / update / remove customers. It
+    CALLS the deterministic operations services (which enforce every rule — no overselling, no
+    negative stock). `task` is the action to carry out."""
+    return ""
+
+
+HANDOFF_TOOLS = [to_analytics, to_marketing, to_workspace, to_operations]
+HANDOFF_TARGET = {
+    "to_analytics": "analytics",
+    "to_marketing": "marketing",
+    "to_workspace": "workspace",
+    "to_operations": "operations",
+}
 # Loop guard: cap how many capability hops one turn may chain, so the supervisor can't delegate
 # forever (belt-and-braces with the run's recursion_limit).
 MAX_DELEGATIONS = 6
@@ -89,13 +103,16 @@ MAX_DELEGATIONS = 6
 # — the bug where this said "Gmail + Calendar only" and the supervisor refused to route spreadsheet
 # requests (which the workspace agent could actually do) to it.
 SUPERVISOR_INSTRUCTIONS = (
-    "You are the supervisor for Nora, Curry Nomad's operations assistant. You coordinate three "
+    "You are the supervisor for Nora, Curry Nomad's operations assistant. You coordinate four "
     "specialist capabilities by delegating with the handoff tools — you do NOT do their work "
     "yourself:\n"
-    "- to_analytics: business data/metrics questions (sales, revenue, products, customers, "
-    "refunds, channels, time windows), answered by querying the database.\n"
+    "- to_analytics: business data/metrics QUESTIONS (sales, revenue, products, customers, "
+    "refunds, channels, time windows), ANSWERED by querying the database (read-only).\n"
     "- to_marketing: CREATE an Instagram post / creative for a product.\n"
-    "- to_workspace: act on the operator's own Google account — {workspace_scope}.\n\n"
+    "- to_workspace: act on the operator's own Google account — {workspace_scope}.\n"
+    "- to_operations: MANAGE the business's own orders, stock, and customers — create/edit/cancel an "
+    "order, receive/adjust stock, add/update/delete a customer. (Contrast with to_analytics: that one "
+    "READS metrics and never changes anything; to_operations makes the CHANGE.)\n\n"
     "Rules:\n"
     "1. To use a capability, call its handoff tool with a clear, self-contained `task`. For a "
     "marketing request set `product_hint` to the product's name (resolve 'it'/'that one' from the "
@@ -106,12 +123,16 @@ SUPERVISOR_INSTRUCTIONS = (
     "Drive — delegate to to_workspace and let it carry out and report the result. Do NOT decide "
     "yourself that a Google action is unsupported or that you lack the tools; the workspace agent "
     "has them.\n"
-    "4. When the specialists have fully handled the request, STOP — do not call another tool and "
+    "4. For ANY change to the business's own orders, stock, or customers — placing/editing/cancelling "
+    "an order, receiving/adjusting stock, adding/updating/removing a customer — delegate to "
+    "to_operations. Do NOT answer from analytics data (that's read-only) or decide yourself that it "
+    "can't be done; the operations agent has the tools and the rules.\n"
+    "5. When the specialists have fully handled the request, STOP — do not call another tool and "
     "do not restate their answer; just end. NEVER delegate to a specialist that has already "
     "answered this turn.\n"
-    "5. If the request is ambiguous or matches no capability, do NOT call a tool — reply with one "
+    "6. If the request is ambiguous or matches no capability, do NOT call a tool — reply with one "
     "short clarifying question.\n"
-    "6. present_ui renders an inline card (fields / metrics / table / chart) for YOUR OWN direct "
+    "7. present_ui renders an inline card (fields / metrics / table / chart) for YOUR OWN direct "
     "reply. Use your judgment: when you answer the user yourself and the reply is a clean result that "
     "shows nicely — a capabilities overview, a comparison, a structured summary — render it alongside "
     "your written words; skip it for a clarifying question or a throwaway reply. BUT ROUTE FIRST: it "
@@ -121,8 +142,9 @@ SUPERVISOR_INSTRUCTIONS = (
 
 # Shown when the supervisor itself fails (a flaky classifier shouldn't crash the turn).
 CLARIFY_TEXT = (
-    "I can answer a question about your business data, create an Instagram post for a product, or "
-    "act on your Google Workspace (Gmail, Sheets, Docs, Tasks, and Drive). Which would you like?"
+    "I can answer a question about your business data, create an Instagram post for a product, act on "
+    "your Google Workspace (Gmail, Sheets, Docs, Tasks, Drive), or manage your orders, stock, and "
+    "customers. Which would you like?"
 )
 
 # Shown when the workspace capability is unavailable (flag off, or no Google token connected yet).
@@ -392,6 +414,7 @@ def build_orchestrator(
     marketing_graph=None,
     dashboard_model=None,
     workspace_agent=None,
+    operations_agent=None,
     checkpointer=None,
     store=None,
 ):
@@ -438,10 +461,17 @@ def build_orchestrator(
         # Reuse the dashboard model (a disable_streaming structured-output model, None if no key) to
         # AI-author the HITL approval card on the primitive path — best-effort, like the dashboard.
         workspace_agent = _build_workspace_agent(settings=settings, layout_model=dashboard_model)
+    if operations_agent is None and settings.operations_enabled:
+        # Phase 2: the operations agent CRUDs orders/stock/customers by calling the deterministic
+        # services in-process. Built lazily (its model needs no key at import); the store is opened on
+        # first run from settings.ops_db_path. Reuse the dashboard model to AI-author the approval card.
+        from nora.operations.agent import build_operations_agent as _build_operations_agent
+
+        operations_agent = _build_operations_agent(settings=settings, layout_model=dashboard_model)
 
     def supervisor(
         state: OrchestratorState,
-    ) -> Command[Literal["analytics", "marketing", "workspace", "__end__"]]:
+    ) -> Command[Literal["analytics", "marketing", "workspace", "operations", "__end__"]]:
         # The coordinating "main agent": read the conversation, delegate to one capability (a handoff
         # tool-call → Command(goto=...)), or finish. Capabilities return here, so it can chain them.
         messages = state["messages"]
@@ -731,6 +761,59 @@ def build_orchestrator(
         log.info("workspace.completed", new_messages=len(new_messages), tools=len(tools_used))
         return {"messages": new_messages}
 
+    def operations_stub(state: OrchestratorState) -> dict:
+        # Flag OFF (no operations_agent built): a sync node that says the capability is unavailable.
+        return {
+            "messages": [
+                AIMessage(content="Order/stock/customer management isn't enabled right now.")
+            ]
+        }
+
+    def operations(state: OrchestratorState, config) -> dict:
+        # Flag ON: CRUD the business's own orders / stock / customers via the in-process operations
+        # agent — a tool loop over the deterministic services (rules stay in code, not the prompt).
+        # SYNC (SQLite, no MCP), and imperative like marketing: invoking with `config` is what lets a
+        # HITL interrupt() deep inside it (a high-risk write awaiting approval) bubble up and pause the
+        # orchestrator, and a Command(resume=...) flow back down on the same thread.
+        memory_context = recall_block(current_store(), config, _last_user_text(state["messages"]))
+        try:
+            new_messages = operations_agent(
+                state["messages"], config=config, memory_context=memory_context
+            )
+        except GraphBubbleUp:
+            # A HITL interrupt() raises GraphInterrupt, an Exception subclass — re-raise the whole
+            # family so it PAUSES the orchestrator instead of being swallowed by the broad except below
+            # (the workspace lesson; marketing dodges this by never wrapping its .invoke()).
+            raise
+        except Exception as exc:  # noqa: BLE001 — never crash the turn; degrade to a text reply
+            log.info("operations.skipped", error=str(exc))
+            return {
+                "messages": [
+                    AIMessage(content="I hit an error managing that — please try that request again.")
+                ]
+            }
+        # Skip declined writes when listing what actually ran (the gate tags rejects).
+        rejected_ids = {
+            getattr(m, "tool_call_id", None)
+            for m in new_messages
+            if isinstance(m, ToolMessage)
+            and m.additional_kwargs.get("operations_decision") == "reject"
+        }
+        tools_used = [
+            tc.get("name")
+            for m in new_messages
+            for tc in (getattr(m, "tool_calls", None) or [])
+            if tc.get("name") and tc.get("id") not in rejected_ids
+        ]
+        # Re-emit any present_ui surfaces the agent authored (this imperative loop's `ui` channel is
+        # discarded), plus a compact "ops_actions" badge of what Nora did. Best-effort, like the others.
+        emit_present_ui_from_messages(new_messages)
+        final = next((m for m in reversed(new_messages) if isinstance(m, AIMessage)), None)
+        if final is not None:
+            push_ui_message("ops_actions", {"tools": tools_used}, message=final)
+        log.info("operations.completed", new_messages=len(new_messages), tools=len(tools_used))
+        return {"messages": new_messages}
+
     builder = StateGraph(OrchestratorState, context_schema=Context)
     builder.add_node("supervisor", supervisor)
     # Analytics is added as a real subgraph NODE (not invoked imperatively): because it's part of
@@ -748,6 +831,10 @@ def build_orchestrator(
     # flag ON → the async agent node (awaits the per-run MCP loop). The supervisor delegates here
     # either way.
     builder.add_node("workspace", workspace if workspace_agent is not None else workspace_stub)
+    # Operations: an agentic tool loop that CRUDs the business's orders/stock/customers by calling the
+    # deterministic services in-process. Flag OFF → a sync "unavailable" stub. Like marketing, it's an
+    # imperative node so a HITL interrupt (a high-risk write) bubbles up and resumes.
+    builder.add_node("operations", operations if operations_agent is not None else operations_stub)
 
     builder.add_edge(START, "supervisor")
     # The supervisor dispatches via Command(goto=...). Every capability returns TO the supervisor
@@ -756,6 +843,7 @@ def build_orchestrator(
     builder.add_edge("analytics_dashboard", "supervisor")
     builder.add_edge("marketing", "supervisor")
     builder.add_edge("workspace", "supervisor")
+    builder.add_edge("operations", "supervisor")
 
     return builder.compile(checkpointer=checkpointer, store=store)
 

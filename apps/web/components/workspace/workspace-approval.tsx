@@ -68,6 +68,9 @@ export function WorkspaceApproval({ interrupt }: { interrupt: WorkspaceApprovalI
   const stream = useStreamContext();
   const busy = stream.isLoading;
   const [locked, runLocked] = useSubmitLock();
+  // The same gate serves the workspace agent and the operations agent — label it by which paused.
+  const isOps = interrupt.kind === "operations_approval";
+  const capability = isOps ? "Operations" : "Workspace";
   const [threadId] = useQueryState("threadId");
   const actions = interrupt.action_requests ?? [];
 
@@ -117,11 +120,11 @@ export function WorkspaceApproval({ interrupt }: { interrupt: WorkspaceApprovalI
       approved > 0
         ? {
             icon: "approve",
-            label: `Workspace: ${approved} action${approved === 1 ? "" : "s"} approved`,
+            label: `${capability}: ${approved} action${approved === 1 ? "" : "s"} approved`,
             detail,
             anchorId,
           }
-        : { icon: "reject", label: "Workspace actions rejected", detail, anchorId },
+        : { icon: "reject", label: `${capability} actions rejected`, detail, anchorId },
     );
   };
 
@@ -153,13 +156,20 @@ export function WorkspaceApproval({ interrupt }: { interrupt: WorkspaceApprovalI
       <div className="min-w-0 flex-1 space-y-2.5">
         <div className="flex items-center gap-2">
           <span className="text-[13px] font-semibold">Nora</span>
-          <span className="rounded-full border border-brand-edge bg-brand-tint px-2 py-px text-[9.5px] font-semibold text-brand-text">
-            Workspace · awaiting approval
+          <span
+            className={cn(
+              "rounded-full border px-2 py-px text-[9.5px] font-semibold",
+              isOps
+                ? "border-success-edge bg-success-tint text-success-text"
+                : "border-brand-edge bg-brand-tint text-brand-text",
+            )}
+          >
+            {capability} · awaiting approval
           </span>
         </div>
         <p className="text-[13.5px] text-muted-foreground">
           {interrupt.question ??
-            "Approve these Google Workspace actions before Nora runs them?"}
+            `Approve these ${isOps ? "operations" : "Google Workspace"} actions before Nora runs them?`}
         </p>
 
         <div className="flex flex-col gap-2.5">

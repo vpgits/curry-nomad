@@ -148,11 +148,13 @@ export interface WorkspaceActionRequest {
   layout?: ApprovalLayout; // AI-authored presentation (values literal); fallback derived if absent
 }
 
-// Payload emitted when the workspace agent pauses before write actions. Unifies BOTH mechanisms:
-//   - path B ("primitive"): the hand-written loop's interrupt() — sets `kind: "workspace_approval"`.
-//   - path A ("middleware"): create_agent + HumanInTheLoopMiddleware — adds `review_configs`, no kind.
+// Payload emitted when an agent pauses before WRITE actions — the shared write-approval gate. Covers:
+//   - the workspace agent (Gmail/Sheets/Docs/…): `kind: "workspace_approval"` (primitive), or the
+//     middleware path which adds `review_configs` and no kind.
+//   - the operations agent (high-risk order/stock/customer writes): `kind: "operations_approval"`.
+// All carry the same `action_requests` shape and resume the same way, so one gate component drives them.
 export interface WorkspaceApprovalInterrupt {
-  kind?: "workspace_approval";
+  kind?: "workspace_approval" | "operations_approval";
   question?: string;
   action_requests: WorkspaceActionRequest[];
   review_configs?: unknown[];

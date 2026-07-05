@@ -94,6 +94,7 @@ class Settings(BaseSettings):
     analytics_model: str = ""  # NORA_ANALYTICS_MODEL — the analytics SQL agent (tool loop)
     marketing_model: str = ""  # NORA_MARKETING_MODEL — the marketing workflow's creative model
     workspace_model: str = ""  # NORA_WORKSPACE_MODEL — the Gmail/Calendar agent
+    operations_model: str = ""  # NORA_OPERATIONS_MODEL — the orders/stock/customers CRUD agent
     dashboard_model: str = ""  # NORA_DASHBOARD_MODEL — gen-UI dashboard / a2ui author / approval-card layout
     # Optional Anthropic extended-thinking budget for the analytics agent (NORA_THINKING_BUDGET).
     # 0 = off (the default keeps gpt-4o behaviour unchanged). When > 0 *and* the analytics model is
@@ -139,6 +140,18 @@ class Settings(BaseSettings):
     # Informational echo of the scopes the demo grants; the real enforcement is the MCP server's
     # `--permissions` flag (and the OAuth consent the operator approves).
     workspace_permissions: str = "gmail:send docs:full sheets:full tasks:full calendar:full drive:readonly"
+
+    # --- Operations agent (Phase 2: CRUD orders/stock/customers by calling the services) ---
+    operations_enabled: bool = True  # master flag / killswitch (NORA_OPERATIONS_ENABLED)
+    # Which of the agent's WRITE actions pause for the operator's approval before they run:
+    #   - "high_risk": the DEFAULT — only irreversible/destructive writes (cancel/edit an order,
+    #                  delete a customer, write off stock). Low-risk writes (create order, receive
+    #                  stock, add/update customer) and all reads run straight through.
+    #   - "all":       every write pauses (mirrors the workspace write gate).
+    #   - "off":       no gate — writes run straight through (the services still reject invalid ones).
+    # Same batched `interrupt()` → `{"decisions": [...]}` resume protocol as the workspace gate, so the
+    # web client's approval card is reused unchanged.
+    operations_hitl: Literal["off", "high_risk", "all"] = "high_risk"  # NORA_OPERATIONS_HITL
 
     # --- Analytics tool guards ---
     max_sql_rows: int = 200  # LIMIT cap injected into run_sql
@@ -186,7 +199,9 @@ class Settings(BaseSettings):
     # Where generated images are written (served by the ops-api at /media).
     media_dir: Path = _DEFAULT_MEDIA_DIR
 
-    def model_for(self, node: Literal["analytics", "marketing", "workspace", "dashboard"]) -> str:
+    def model_for(
+        self, node: Literal["analytics", "marketing", "workspace", "operations", "dashboard"]
+    ) -> str:
         """The `provider:model` string for one LLM node, falling back to the base `model` when that
         node's override is empty. Lets each capability run its own model (see the per-node override
         fields above). The supervisor is the deliberate exception — it uses `router_model`, built in
@@ -195,6 +210,7 @@ class Settings(BaseSettings):
             "analytics": self.analytics_model,
             "marketing": self.marketing_model,
             "workspace": self.workspace_model,
+            "operations": self.operations_model,
             "dashboard": self.dashboard_model,
         }[node] or self.model
 
