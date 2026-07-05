@@ -36,7 +36,10 @@ CREATE TABLE ref_products (
 CREATE TABLE ref_customers (
   customer_id INTEGER PRIMARY KEY,
   name        TEXT NOT NULL,
-  city        TEXT NOT NULL
+  city        TEXT NOT NULL,
+  email       TEXT,                    -- nullable contact fields; the seed snapshot leaves them
+  phone       TEXT,                    -- NULL (the business DB has none), the agent fills them in
+  address     TEXT
 );
 
 -- Current stock position, one row per product ------------------------------------------------

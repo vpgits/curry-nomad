@@ -39,6 +39,9 @@ class SqliteOperationsStore:
         conn = sqlite3.connect(self.db_path, isolation_level=None, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        # WAL lets a reader and a writer coexist without blocking — important now that TWO processes
+        # write this file: the ops-api (REST) and the in-process operations agent inside the graph.
+        conn.execute("PRAGMA journal_mode = WAL")
         return conn
 
     # -- transactions -----------------------------------------------------------------

@@ -29,6 +29,7 @@ from nora.operations import geo, routing
 from nora.operations.errors import OperationsError
 from nora.operations.interfaces import OperationsStore
 from nora.operations.models import (
+    Customer,
     LedgerEntry,
     Order,
     OrderItem,
@@ -131,6 +132,90 @@ def _append_ledger(
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         (product_id, kind, qty_delta, balance_after, reason, ref, _timestamp()),
     )
+
+
+def _reserve_lines(conn: sqlite3.Connection, order_id: int, lines: list[OrderLineInput]) -> int:
+    """Resolve → aggregate → oversell-check → reserve a set of lines for an EXISTING order row.
+
+    Inserts the ``ops_order_items``, bumps ``reserved``, appends a ``reserve`` ledger row per product,
+    and returns the exact integer total. The single source of the reservation rules — shared by
+    ``create_order`` (fresh order) and ``edit_order`` (after the old reservations are released)."""
+    wanted: dict[int, int] = {}
+    meta: dict[int, dict] = {}
+    for line in lines:
+        if line.quantity <= 0:
+            raise OperationsError(f"Line quantity must be positive (got {line.quantity}).")
+        product = _resolve_product(conn, product_id=line.product_id, sku=line.sku)
+        if not product["active"]:
+            raise OperationsError(f"Product {product['sku']} is inactive and cannot be ordered.")
+        pid = product["product_id"]
+        wanted[pid] = wanted.get(pid, 0) + line.quantity
+        meta[pid] = product
+
+    for pid, qty in wanted.items():
+        stock = conn.execute(
+            "SELECT on_hand, reserved FROM stock_levels WHERE product_id = ?", (pid,)
+        ).fetchone()
+        available = (stock["on_hand"] - stock["reserved"]) if stock else 0
+        if qty > available:
+            log.info("ops.oversell_rejected", product_id=pid, requested=qty, available=available)
+            raise OperationsError(
+                f"Cannot reserve {qty} of {meta[pid]['sku']}: only {available} available."
+            )
+
+    total = sum(qty * meta[pid]["unit_price_lkr"] for pid, qty in wanted.items())
+    for pid, qty in wanted.items():
+        unit_price = meta[pid]["unit_price_lkr"]
+        conn.execute(
+            "INSERT INTO ops_order_items "
+            "(order_id, product_id, quantity, unit_price_lkr, subtotal_lkr) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (order_id, pid, qty, unit_price, qty * unit_price),
+        )
+        stock = conn.execute(
+            "SELECT on_hand, reserved FROM stock_levels WHERE product_id = ?", (pid,)
+        ).fetchone()
+        conn.execute(
+            "UPDATE stock_levels SET reserved = ? WHERE product_id = ?",
+            (stock["reserved"] + qty, pid),
+        )
+        _append_ledger(
+            conn,
+            product_id=pid,
+            kind="reserve",
+            qty_delta=0,  # reservations move `reserved`, not `on_hand`
+            balance_after=stock["on_hand"],
+            reason=f"order #{order_id}",
+            ref=f"order #{order_id}",
+        )
+    return total
+
+
+def _release_order_reservations(conn: sqlite3.Connection, order_id: int) -> None:
+    """Free the stock a reserved order holds: for each line ``reserved -= qty`` plus a ``release``
+    ledger row. Shared by ``cancel_order`` and ``edit_order`` (the first code paths to emit the
+    ``release`` ledger kind). Assumes the order is currently ``reserved``."""
+    items = conn.execute(
+        "SELECT product_id, quantity FROM ops_order_items WHERE order_id = ?", (order_id,)
+    ).fetchall()
+    for it in items:
+        pid, qty = it["product_id"], it["quantity"]
+        stock = conn.execute(
+            "SELECT on_hand, reserved FROM stock_levels WHERE product_id = ?", (pid,)
+        ).fetchone()
+        conn.execute(
+            "UPDATE stock_levels SET reserved = ? WHERE product_id = ?",
+            (max(0, stock["reserved"] - qty), pid),
+        )
+        _append_ledger(
+            conn,
+            product_id=pid,
+            kind="release",
+            qty_delta=0,  # releasing a reservation moves `reserved`, not `on_hand`
+            balance_after=stock["on_hand"],
+            reason=f"order #{order_id}",
+            ref=f"order #{order_id}",
+        )
 
 
 # --- reads ----------------------------------------------------------------------------------
@@ -323,66 +408,16 @@ def create_order(
         if customer is None:
             raise OperationsError(f"Unknown customer (id {customer_id}).")
 
-        # Resolve products and aggregate duplicate lines by product before the oversell check.
-        wanted: dict[int, int] = {}
-        meta: dict[int, dict] = {}
-        for line in lines:
-            if line.quantity <= 0:
-                raise OperationsError(f"Line quantity must be positive (got {line.quantity}).")
-            product = _resolve_product(conn, product_id=line.product_id, sku=line.sku)
-            if not product["active"]:
-                raise OperationsError(
-                    f"Product {product['sku']} is inactive and cannot be ordered."
-                )
-            pid = product["product_id"]
-            wanted[pid] = wanted.get(pid, 0) + line.quantity
-            meta[pid] = product
-
-        # Oversell check, per product, against currently-available stock.
-        for pid, qty in wanted.items():
-            stock = conn.execute(
-                "SELECT on_hand, reserved FROM stock_levels WHERE product_id = ?", (pid,)
-            ).fetchone()
-            available = (stock["on_hand"] - stock["reserved"]) if stock else 0
-            if qty > available:
-                log.info("ops.oversell_rejected", product_id=pid, requested=qty, available=available)
-                raise OperationsError(
-                    f"Cannot reserve {qty} of {meta[pid]['sku']}: only {available} available."
-                )
-
-        # Passed every check — create the order, reserve stock, append the ledger.
-        total = sum(qty * meta[pid]["unit_price_lkr"] for pid, qty in wanted.items())
+        # Insert the head first (total filled in after reserving), then reserve the lines. All the
+        # resolve/oversell/reserve/ledger rules live in `_reserve_lines` (shared with edit_order).
         cur = conn.execute(
             "INSERT INTO ops_orders (customer_id, status, total_lkr, idempotency_key, created_at) "
-            "VALUES (?, 'reserved', ?, ?, ?)",
-            (customer_id, total, idempotency_key, _timestamp()),
+            "VALUES (?, 'reserved', 0, ?, ?)",
+            (customer_id, idempotency_key, _timestamp()),
         )
         order_id = cur.lastrowid
-
-        for pid, qty in wanted.items():
-            unit_price = meta[pid]["unit_price_lkr"]
-            conn.execute(
-                "INSERT INTO ops_order_items "
-                "(order_id, product_id, quantity, unit_price_lkr, subtotal_lkr) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (order_id, pid, qty, unit_price, qty * unit_price),
-            )
-            stock = conn.execute(
-                "SELECT on_hand, reserved FROM stock_levels WHERE product_id = ?", (pid,)
-            ).fetchone()
-            conn.execute(
-                "UPDATE stock_levels SET reserved = ? WHERE product_id = ?",
-                (stock["reserved"] + qty, pid),
-            )
-            _append_ledger(
-                conn,
-                product_id=pid,
-                kind="reserve",
-                qty_delta=0,  # reservations move `reserved`, not `on_hand`
-                balance_after=stock["on_hand"],
-                reason=f"order #{order_id}",
-                ref=f"order #{order_id}",
-            )
+        total = _reserve_lines(conn, order_id, lines)
+        conn.execute("UPDATE ops_orders SET total_lkr = ? WHERE order_id = ?", (total, order_id))
 
         if delivery is not None:
             lat = delivery.lat if delivery.lat is not None else geo.coords_for_city(delivery.city)[0]
@@ -400,7 +435,7 @@ def create_order(
         order_id=order_id,
         customer_id=customer_id,
         total_lkr=total,
-        lines=len(wanted),
+        lines=len(lines),
     )
     return get_order(store, order_id)
 
@@ -444,6 +479,177 @@ def get_order(store: OperationsStore, order_id: int) -> Order:
         items=items,
         delivery_id=delivery["delivery_id"] if delivery else None,
     )
+
+
+def cancel_order(store: OperationsStore, order_id: int) -> Order:
+    """Cancel a reserved order: release its held stock and mark it ``cancelled``.
+
+    Rejects a ``dispatched`` order (its stock already shipped — cancellation would be a lie); a
+    no-op if it's already ``cancelled``. Wires the pre-built ``release`` ledger kind + ``cancelled``
+    status. One transaction: release reservations, drop the pending delivery, flip the status."""
+    with store.tx() as conn:
+        head = conn.execute(
+            "SELECT status FROM ops_orders WHERE order_id = ?", (order_id,)
+        ).fetchone()
+        if head is None:
+            raise OperationsError(f"Unknown order {order_id}.")
+        if head["status"] == "cancelled":
+            return get_order(store, order_id)  # idempotent no-op
+        if head["status"] != "reserved":
+            raise OperationsError(
+                f"Cannot cancel a {head['status']} order — only reserved orders can be cancelled."
+            )
+        _release_order_reservations(conn, order_id)
+        conn.execute("DELETE FROM deliveries WHERE order_id = ?", (order_id,))
+        conn.execute("UPDATE ops_orders SET status = 'cancelled' WHERE order_id = ?", (order_id,))
+
+    log.info("ops.order_cancelled", order_id=order_id)
+    return get_order(store, order_id)
+
+
+def edit_order(store: OperationsStore, order_id: int, lines: list[OrderLineInput]) -> Order:
+    """Replace a reserved order's line items with ``lines`` and recompute the total.
+
+    Only a ``reserved`` order can be edited. One transaction: release the current reservations
+    (so the new oversell-check sees that freed stock), delete the old items, re-reserve the new
+    set via ``_reserve_lines`` (which rejects an oversell — rolling the whole edit back). Keeps the
+    same order id, customer, and delivery."""
+    if not lines:
+        raise OperationsError("An order needs at least one line item.")
+    with store.tx() as conn:
+        head = conn.execute(
+            "SELECT status FROM ops_orders WHERE order_id = ?", (order_id,)
+        ).fetchone()
+        if head is None:
+            raise OperationsError(f"Unknown order {order_id}.")
+        if head["status"] != "reserved":
+            raise OperationsError(
+                f"Cannot edit a {head['status']} order — only reserved orders can be edited."
+            )
+        _release_order_reservations(conn, order_id)
+        conn.execute("DELETE FROM ops_order_items WHERE order_id = ?", (order_id,))
+        total = _reserve_lines(conn, order_id, lines)
+        conn.execute("UPDATE ops_orders SET total_lkr = ? WHERE order_id = ?", (total, order_id))
+
+    log.info("ops.order_edited", order_id=order_id, total_lkr=total, lines=len(lines))
+    return get_order(store, order_id)
+
+
+# --- customers ------------------------------------------------------------------------------
+
+_CUSTOMER_SELECT = "SELECT customer_id, name, city, email, phone, address FROM ref_customers"
+
+
+def _customer_row(row: dict) -> Customer:
+    return Customer(
+        customer_id=row["customer_id"],
+        name=row["name"],
+        city=row["city"],
+        email=row["email"],
+        phone=row["phone"],
+        address=row["address"],
+    )
+
+
+def list_customers(store: OperationsStore) -> list[Customer]:
+    """Every customer, by name."""
+    return [_customer_row(r) for r in store.fetch_all(_CUSTOMER_SELECT + " ORDER BY name")]
+
+
+def get_customer(store: OperationsStore, customer_id: int) -> Customer:
+    row = store.fetch_one(_CUSTOMER_SELECT + " WHERE customer_id = ?", (customer_id,))
+    if row is None:
+        raise OperationsError(f"Unknown customer (id {customer_id}).")
+    return _customer_row(row)
+
+
+def create_customer(
+    store: OperationsStore,
+    name: str,
+    city: str,
+    *,
+    email: str | None = None,
+    phone: str | None = None,
+    address: str | None = None,
+) -> Customer:
+    """Add a customer. ``customer_id`` auto-assigns (SQLite aliases the INTEGER PK to the rowid, so
+    a new row lands above the seeded snapshot's ids — no collision)."""
+    if not (name and name.strip()):
+        raise OperationsError("A customer needs a name.")
+    if not (city and city.strip()):
+        raise OperationsError("A customer needs a city.")
+    with store.tx() as conn:
+        cur = conn.execute(
+            "INSERT INTO ref_customers (name, city, email, phone, address) VALUES (?, ?, ?, ?, ?)",
+            (name.strip(), city.strip(), email, phone, address),
+        )
+        customer_id = cur.lastrowid
+    log.info("ops.customer_created", customer_id=customer_id, name=name)
+    return get_customer(store, customer_id)
+
+
+def update_customer(
+    store: OperationsStore,
+    customer_id: int,
+    *,
+    name: str | None = None,
+    city: str | None = None,
+    email: str | None = None,
+    phone: str | None = None,
+    address: str | None = None,
+) -> Customer:
+    """Partial update — only the fields passed are changed. Rejects an unknown id or a blank
+    name/city."""
+    fields: dict[str, str | None] = {}
+    if name is not None:
+        if not name.strip():
+            raise OperationsError("Customer name can't be blank.")
+        fields["name"] = name.strip()
+    if city is not None:
+        if not city.strip():
+            raise OperationsError("Customer city can't be blank.")
+        fields["city"] = city.strip()
+    if email is not None:
+        fields["email"] = email
+    if phone is not None:
+        fields["phone"] = phone
+    if address is not None:
+        fields["address"] = address
+    if not fields:
+        raise OperationsError("No customer fields to update.")
+
+    with store.tx() as conn:
+        if conn.execute(
+            "SELECT 1 FROM ref_customers WHERE customer_id = ?", (customer_id,)
+        ).fetchone() is None:
+            raise OperationsError(f"Unknown customer (id {customer_id}).")
+        # Column names come from the fixed set above (never user input), so this interpolation is safe.
+        assignments = ", ".join(f"{k} = ?" for k in fields)
+        conn.execute(
+            f"UPDATE ref_customers SET {assignments} WHERE customer_id = ?",
+            (*fields.values(), customer_id),
+        )
+    log.info("ops.customer_updated", customer_id=customer_id, fields=list(fields))
+    return get_customer(store, customer_id)
+
+
+def delete_customer(store: OperationsStore, customer_id: int) -> None:
+    """Delete a customer. Rejects deletion when the customer still has orders (referential safety
+    surfaced as an ``OperationsError``, not a raw FK failure — cancel the orders first)."""
+    with store.tx() as conn:
+        if conn.execute(
+            "SELECT 1 FROM ref_customers WHERE customer_id = ?", (customer_id,)
+        ).fetchone() is None:
+            raise OperationsError(f"Unknown customer (id {customer_id}).")
+        n = conn.execute(
+            "SELECT COUNT(*) AS n FROM ops_orders WHERE customer_id = ?", (customer_id,)
+        ).fetchone()["n"]
+        if n:
+            raise OperationsError(
+                f"Customer {customer_id} has {n} order(s) and can't be deleted. Cancel them first."
+            )
+        conn.execute("DELETE FROM ref_customers WHERE customer_id = ?", (customer_id,))
+    log.info("ops.customer_deleted", customer_id=customer_id)
 
 
 # --- delivery routing -----------------------------------------------------------------------

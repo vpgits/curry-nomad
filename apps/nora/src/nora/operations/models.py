@@ -42,6 +42,19 @@ class LedgerEntry:
 
 
 @dataclass(frozen=True)
+class Customer:
+    """A customer record. Seeded snapshots carry only name/city (contact fields NULL); customers the
+    operations agent creates carry the full contact details."""
+
+    customer_id: int
+    name: str
+    city: str
+    email: str | None = None
+    phone: str | None = None
+    address: str | None = None
+
+
+@dataclass(frozen=True)
 class OrderItem:
     product_id: int
     sku: str
