@@ -464,3 +464,45 @@ def test_workspace_first_party_default_wires_the_async_node():
         {"configurable": {"thread_id": "w-fp"}},
     )
     assert "connect your google workspace" in result["messages"][-1].content.lower()
+
+
+def test_workspace_agent_present_ui_is_reemitted_to_top_level():
+    """The workspace agent can author a generative-UI card mid-answer via present_ui. Because the node
+    is IMPERATIVE — its inner loop's `ui` channel is discarded, only the messages are returned — the
+    card can't propagate up on its own (unlike the analytics subgraph). The orchestrator's workspace
+    node RE-EMITS it (emit_present_ui_from_messages), so it lands in the top-level `ui` channel bound to
+    the AI message that authored it. present_ui is a read-like local tool (never gated), so hitl='off'
+    exercises the plain ToolNode path here."""
+    model = ScriptedChatModel(
+        [
+            ai_tool_call(
+                "present_ui",
+                {
+                    "blocks": [
+                        {"type": "heading", "text": "Unread from suppliers"},
+                        {
+                            "type": "table",
+                            "columns": ["From", "Subject"],
+                            "rows": [["priya@matale.lk", "Cloves ETA"]],
+                        },
+                    ]
+                },
+                "c1",
+            ),
+            ai_final("You have 1 unread supplier email."),
+        ]
+    )
+    agent = build_workspace_agent(model=model, tools_provider=lambda *, access_token: [], hitl="off")
+    orch = _workspace_orch(agent)
+
+    result = _run(orch,
+        {"messages": [HumanMessage("summarize my unread supplier emails")]},
+        {"configurable": {"thread_id": "w-present-ui", "google_access_token": "tok"}},
+    )
+
+    cards = [u for u in result.get("ui", []) if u.get("name") == "a2ui_surface"]
+    assert len(cards) == 1, "the workspace-authored surface must be re-emitted exactly once at top level"
+    assert [b["type"] for b in cards[0]["props"]["blocks"]] == ["heading", "table"]
+    # Bound to the AI message that called present_ui (so it renders inline under it).
+    author_id = cards[0]["metadata"]["message_id"]
+    assert author_id and any(getattr(m, "id", None) == author_id for m in result["messages"])

@@ -44,7 +44,7 @@ def _orchestrator(checkpointer):
             [
                 ai_tool_call(
                     "to_marketing",
-                    {"task": "make a video ad for Cloves", "product_hint": "Cloves"},
+                    {"task": "make an Instagram post for Cloves", "product_hint": "Cloves"},
                     "h1",
                 ),
                 ai_final(""),
@@ -58,10 +58,10 @@ def _orchestrator(checkpointer):
 
 
 def _brief_from_ui(result) -> dict | None:
-    """The marketing brief now rides the generative-UI channel (push_ui_message("video_brief",
+    """The marketing brief now rides the generative-UI channel (push_ui_message("post_brief",
     {"brief": ...})), not additional_kwargs. Pull it back out of result["ui"]."""
     for ui in result.get("ui", []):
-        if ui.get("name") == "video_brief":
+        if ui.get("name") == "post_brief":
             return ui["props"]["brief"]
     return None
 
@@ -78,7 +78,7 @@ def _drive_pause_then_resume(checkpointer, thread_id: str, resume=None) -> dict:
     graph = _orchestrator(checkpointer)
     config = {"configurable": {"thread_id": thread_id}}
 
-    graph.invoke({"messages": [HumanMessage(content="make a video ad for Cloves")]}, config)
+    graph.invoke({"messages": [HumanMessage(content="make an Instagram post for Cloves")]}, config)
     state = graph.get_state(config)
     assert state.interrupts, "interrupt from the marketing subgraph must surface on the orchestrator"
     assert state.next == ("marketing",), "the orchestrator pauses with the marketing node pending"
@@ -90,7 +90,7 @@ def _drive_pause_then_resume(checkpointer, thread_id: str, resume=None) -> dict:
 
 def test_orchestrator_pauses_and_resumes_across_subgraph():
     result = _drive_pause_then_resume(build_checkpointer(), "orch-hitl-1")
-    assert "Video brief ready" in result["messages"][-1].content
+    assert "Instagram post ready" in result["messages"][-1].content
     brief = _brief_from_ui(result)
     assert isinstance(brief, dict) and brief["product_name"]  # JSON-native, ready for the UI
 
@@ -102,7 +102,7 @@ def test_orchestrator_resume_accepts_copilotkit_json_string_approve():
     result = _drive_pause_then_resume(
         build_checkpointer(), "orch-hitl-ck-approve", resume=json.dumps({"approved": True})
     )
-    assert "Video brief ready" in result["messages"][-1].content
+    assert "Instagram post ready" in result["messages"][-1].content
 
 
 def test_orchestrator_resume_accepts_copilotkit_json_string_reject():
@@ -121,5 +121,5 @@ def test_orchestrator_resume_survives_strict_msgpack():
     type is persisted in graph state."""
     strict = InMemorySaver(serde=JsonPlusSerializer(allowed_msgpack_modules=None))
     result = _drive_pause_then_resume(strict, "orch-hitl-strict-1")
-    assert "Video brief ready" in result["messages"][-1].content
+    assert "Instagram post ready" in result["messages"][-1].content
     assert _brief_from_ui(result)["product_name"]

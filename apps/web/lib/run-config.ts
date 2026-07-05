@@ -26,5 +26,18 @@ export async function buildSubmitConfig(): Promise<
   if (typeof window !== "undefined" && window.localStorage.getItem(AUTHOR_UI_KEY) === "true") {
     configurable.ui_mode = "authored";
   }
+  // Dynamic per-run context the backend folds into the supervisor + workspace prompts AFTER their
+  // static (cacheable) prefix — so temporal requests resolve without pestering the operator ("what
+  // timezone is 'today 5pm'?"). The BROWSER is authoritative for "now" and "where"; the server's
+  // clock/timezone isn't the operator's. Sent every turn (cheap; the backend ignores it where it
+  // doesn't apply, e.g. analytics, which uses its fixed data_as_of).
+  if (typeof window !== "undefined") {
+    configurable.client_now = new Date().toISOString();
+    try {
+      configurable.client_timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    } catch {
+      /* Intl unavailable — skip; the backend still has client_now (UTC) */
+    }
+  }
   return Object.keys(configurable).length > 0 ? { config: { configurable } } : {};
 }

@@ -14,7 +14,13 @@ from __future__ import annotations
 from typing import Literal
 
 from langchain.chat_models import init_chat_model
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    RemoveMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.runtime import Runtime
@@ -26,6 +32,7 @@ from nora.memory import GLOBAL_DEFINITIONS, MEMORY_TOOLS
 from nora.observability import get_logger
 from nora.services.interfaces import SqlError
 from nora.state import AnalyticsState
+from nora.ui_tools import present_ui
 
 log = get_logger(__name__)
 
@@ -92,14 +99,31 @@ def _used_tool_this_turn(messages: list) -> bool:
     )
 
 
+def _is_hidden(message) -> bool:
+    """A message already marked non-rendering (its id carries the client's do-not-render prefix)."""
+    return str(getattr(message, "id", "") or "").startswith("do-not-render-")
+
+
 def _bare_answers_this_turn(messages: list) -> int:
     """Count tool-less AIMessage 'answers' since the latest user message — bounds the guard to a
-    single retry (so a genuine no-data answer, or a stubborn model, still terminates)."""
+    single retry (so a genuine no-data answer, or a stubborn model, still terminates). Counts the
+    hidden placeholders too (see `llm_node`), so hiding a rescued phantom doesn't reset the bound."""
     return sum(
         1
         for m in messages[_last_human_index(messages) + 1 :]
         if isinstance(m, AIMessage) and not getattr(m, "tool_calls", None)
     )
+
+
+def _phantom_answers_this_turn(messages: list) -> list:
+    """The still-VISIBLE tool-less AIMessage 'answers' since the latest user message — the spurious
+    first-pass replies (e.g. gpt-5.4's "I'm sorry, but I can't complete that request." before it has
+    queried anything) that the query guard is about to retry past, so `llm_node` can hide them."""
+    return [
+        m
+        for m in messages[_last_human_index(messages) + 1 :]
+        if isinstance(m, AIMessage) and not getattr(m, "tool_calls", None) and not _is_hidden(m)
+    ]
 
 
 def route_after_llm(state: AnalyticsState) -> Literal["tools", "llm", "__end__"]:
@@ -156,10 +180,13 @@ def build_analytics_graph(
             )
         else:
             model = init_chat_model(model_id, temperature=0, streaming=True)
-    # DB tools + per-user memory tools (save_memory / search_memory). The memory tools are kept OUT
-    # of ANALYTICS_TOOL_NAMES (module level) on purpose: that set feeds the query guard's "did the
-    # agent engage the DB this turn?" check, and a memory-tool call must NOT count as touching data.
-    agent_tools = [*ANALYTICS_TOOLS, *MEMORY_TOOLS]
+    # DB tools + per-user memory tools (save_memory / search_memory) + the generative-UI authoring
+    # tool (present_ui). The memory + present_ui tools are kept OUT of ANALYTICS_TOOL_NAMES (module
+    # level) on purpose: that set feeds the query guard's "did the agent engage the DB this turn?"
+    # check, and a memory / UI-rendering call must NOT count as touching data. `present_ui` lets the
+    # agent render a table/chart/metrics card inline mid-answer (it pushes onto AnalyticsState.ui,
+    # which propagates up to the orchestrator — see state.py / ui_tools.py).
+    agent_tools = [*ANALYTICS_TOOLS, *MEMORY_TOOLS, present_ui]
     model_with_tools = model.bind_tools(agent_tools)
 
     # The table list is static for a given DB; fetch it once at build time.
@@ -179,12 +206,30 @@ def build_analytics_graph(
             definitions = "\n".join(item.value["text"] for item in items)
         system = build_system_prompt(table_names, settings, definitions=definitions)
         # Query guard (see route_after_llm): if the model already gave a tool-less reply this turn but
-        # never touched the DB, it likely narrated intent and stopped — append the nudge so this retry
-        # actually uses the tools. The nudge lives in the ephemeral system prompt (rebuilt each call),
-        # so it never leaks into the shared `messages` channel.
-        if _bare_answers_this_turn(state["messages"]) >= 1 and not _used_tool_this_turn(state["messages"]):
+        # never touched the DB, it likely narrated intent (or spuriously refused — "I can't complete
+        # that request." — before trying) and stopped. This is the guard's retry pass: append the nudge
+        # so it actually uses the tools now, AND HIDE the phantom reply so the rescued turn doesn't show
+        # a stray refusal above the real answer. The nudge lives in the ephemeral system prompt (rebuilt
+        # each call), so it never leaks into the shared `messages` channel.
+        messages = state["messages"]
+        removals: list = []
+        if _bare_answers_this_turn(messages) >= 1 and not _used_tool_this_turn(messages):
             system += "\n\n" + QUERY_NUDGE
-        response = model_with_tools.invoke([SystemMessage(content=system), *state["messages"]])
+            # Suppress each still-visible phantom: drop it, then re-add an EMPTY placeholder under a
+            # `do-not-render-` id. Empty → the downstream answer-extractor (which requires non-empty
+            # content) skips it and the dashboard builds from the REAL answer; the id → the web client
+            # filters it out; still a tool-less AIMessage → it keeps counting in `_bare_answers_this_turn`
+            # so the guard's single-retry bound holds (removing outright would reset the count → loop).
+            phantoms = _phantom_answers_this_turn(messages)
+            hidden_ids = {m.id for m in phantoms if m.id}
+            for m in phantoms:
+                if m.id:
+                    removals.append(RemoveMessage(id=m.id))
+                    removals.append(AIMessage(id=f"do-not-render-{m.id}", content=""))
+            # The retry sees a clean history — no spurious refusals (the just-hidden ones or any
+            # already-hidden placeholder) — so it isn't primed to refuse again.
+            messages = [m for m in messages if m.id not in hidden_ids and not _is_hidden(m)]
+        response = model_with_tools.invoke([SystemMessage(content=system), *messages])
         # Termination guard (mirrors the prebuilt create_agent): if the step budget is nearly spent
         # but the model still wants to call tools, stop with a plain answer instead of looping into a
         # GraphRecursionError. Analytics runs as a subgraph node, so an unhandled recursion error would
@@ -193,13 +238,14 @@ def build_analytics_graph(
         if state.get("remaining_steps", 99) <= 2 and getattr(response, "tool_calls", None):
             return {
                 "messages": [
+                    *removals,
                     AIMessage(
                         content="I wasn't able to finish that analysis within the available steps. "
                         "Try narrowing the question — a specific metric, product, or time window."
-                    )
+                    ),
                 ]
             }
-        return {"messages": [response]}
+        return {"messages": [*removals, response]}
 
     builder = StateGraph(AnalyticsState)
     builder.add_node("llm", llm_node)

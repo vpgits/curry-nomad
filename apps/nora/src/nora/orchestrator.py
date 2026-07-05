@@ -25,6 +25,7 @@ never user-facing text — same reason the dashboard/marketing models disable st
 from __future__ import annotations
 
 from typing import Literal
+from uuid import uuid4
 
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -37,9 +38,12 @@ from langgraph.types import Command
 from nora.analytics.graph import build_analytics_graph
 from nora.config import Settings, get_settings
 from nora.marketing.graph import build_marketing_graph, initial_marketing_state
+from nora.memory import current_config, current_store, recall_block
 from nora.observability import get_logger
+from nora.runtime_context import runtime_context_block
 from nora.schemas import A2uiSurface, AnalyticsDashboard, Context
 from nora.state import OrchestratorState
+from nora.ui_tools import emit_present_ui_from_messages, present_ui, push_surface
 
 log = get_logger(__name__)
 
@@ -60,7 +64,7 @@ def to_analytics(task: str) -> str:
 
 @tool
 def to_marketing(task: str, product_hint: str | None = None) -> str:
-    """Delegate to the marketing studio: CREATE a video ad / reel / creative for a product.
+    """Delegate to the marketing studio: CREATE an Instagram post / creative for a product.
     `task` describes the creative request; set `product_hint` to the product's name when one is
     identifiable (resolve 'it'/'that one' from the conversation)."""
     return ""
@@ -68,8 +72,9 @@ def to_marketing(task: str, product_hint: str | None = None) -> str:
 
 @tool
 def to_workspace(task: str) -> str:
-    """Delegate to the workspace agent: act on the operator's own Google account — draft or send
-    an email (Gmail), or read/create a calendar event. `task` is the action to carry out."""
+    """Delegate to the workspace agent: act on the operator's own Google account — draft/send email
+    (Gmail), create and edit Google Sheets and Docs (e.g. build a spreadsheet from data), manage
+    Google Tasks, and read Google Drive. `task` is the action to carry out."""
     return ""
 
 
@@ -79,39 +84,51 @@ HANDOFF_TARGET = {"to_analytics": "analytics", "to_marketing": "marketing", "to_
 # forever (belt-and-braces with the run's recursion_limit).
 MAX_DELEGATIONS = 6
 
+# `{workspace_scope}` is filled at runtime from `settings.workspace_scope_summary()` (derived from the
+# granted Google scopes) so the router's picture of the workspace capability can't drift from reality
+# — the bug where this said "Gmail + Calendar only" and the supervisor refused to route spreadsheet
+# requests (which the workspace agent could actually do) to it.
 SUPERVISOR_INSTRUCTIONS = (
     "You are the supervisor for Nora, Curry Nomad's operations assistant. You coordinate three "
     "specialist capabilities by delegating with the handoff tools — you do NOT do their work "
     "yourself:\n"
     "- to_analytics: business data/metrics questions (sales, revenue, products, customers, "
     "refunds, channels, time windows), answered by querying the database.\n"
-    "- to_marketing: CREATE a video ad / reel / creative for a product.\n"
-    "- to_workspace: act on the operator's own Google account — draft or send an email (Gmail), "
-    "read or create a calendar event.\n\n"
+    "- to_marketing: CREATE an Instagram post / creative for a product.\n"
+    "- to_workspace: act on the operator's own Google account — {workspace_scope}.\n\n"
     "Rules:\n"
     "1. To use a capability, call its handoff tool with a clear, self-contained `task`. For a "
     "marketing request set `product_hint` to the product's name (resolve 'it'/'that one' from the "
     "conversation).\n"
     "2. You may delegate more than once to CHAIN capabilities — e.g. analyze data, THEN create a "
     "brief from the result. Delegate one capability at a time; its result comes back to you.\n"
-    "3. When the specialists have fully handled the request, STOP — do not call another tool and "
+    "3. For ANY action on the operator's Google account — email, Google Sheets, Docs, Tasks, or "
+    "Drive — delegate to to_workspace and let it carry out and report the result. Do NOT decide "
+    "yourself that a Google action is unsupported or that you lack the tools; the workspace agent "
+    "has them.\n"
+    "4. When the specialists have fully handled the request, STOP — do not call another tool and "
     "do not restate their answer; just end. NEVER delegate to a specialist that has already "
     "answered this turn.\n"
-    "4. If the request is ambiguous or matches no capability, do NOT call a tool — reply with one "
-    "short clarifying question (ask whether they want a data answer or a video ad, and for which "
-    "product)."
+    "5. If the request is ambiguous or matches no capability, do NOT call a tool — reply with one "
+    "short clarifying question.\n"
+    "6. present_ui renders an inline card (fields / metrics / table / chart) for YOUR OWN direct "
+    "reply. Use your judgment: when you answer the user yourself and the reply is a clean result that "
+    "shows nicely — a capabilities overview, a comparison, a structured summary — render it alongside "
+    "your written words; skip it for a clarifying question or a throwaway reply. BUT ROUTE FIRST: it "
+    "is NEVER a substitute for delegating. If a specialist should handle the request, hand off (the "
+    "specialist renders its own cards); use present_ui only on replies you give directly."
 )
 
 # Shown when the supervisor itself fails (a flaky classifier shouldn't crash the turn).
 CLARIFY_TEXT = (
-    "I can answer a question about the business data, or create a video ad for a product. Which "
-    "would you like — and for which product?"
+    "I can answer a question about your business data, create an Instagram post for a product, or "
+    "act on your Google Workspace (Gmail, Sheets, Docs, Tasks, and Drive). Which would you like?"
 )
 
 # Shown when the workspace capability is unavailable (flag off, or no Google token connected yet).
 CONNECT_MSG = (
-    "Connect your Google Workspace and I can act on your Gmail and Calendar — use the “Connect "
-    "Google Workspace” button, then ask me again."
+    "Connect your Google Workspace and I can act on your Google account — Gmail, Sheets, Docs, Tasks, "
+    "and Drive — use the “Connect Google Workspace” button, then ask me again."
 )
 
 
@@ -170,6 +187,32 @@ def _capability_answered_this_turn(messages: list) -> bool:
         if isinstance(m, AIMessage) and m.content and not getattr(m, "tool_calls", None):
             return True
     return False
+
+
+def _render_supervisor_ui(ai: AIMessage) -> AIMessage:
+    """Handle a `present_ui` call the SUPERVISOR made on its own direct reply.
+
+    Unlike the capability agents, the supervisor has no ToolNode — nothing would execute a present_ui
+    call, and a persisted-but-unanswered tool-call would dangle (breaking the NEXT model hop, the
+    classic 'tool_call without a following tool result'). So we execute it here: push each authored
+    surface (associated with `ai`, so it renders inline under the supervisor's reply) and STRIP the
+    present_ui tool-calls off `ai`, keeping its text content. No-op when the supervisor didn't call
+    present_ui, so this is safe to apply on every direct-reply path."""
+    present_calls = [c for c in (getattr(ai, "tool_calls", None) or []) if c.get("name") == present_ui.name]
+    if not present_calls:
+        return ai
+    update: dict = {"tool_calls": [c for c in ai.tool_calls if c.get("name") != present_ui.name]}
+    # Pin the id BEFORE pushing: the card binds to `message.id`, but here the push happens while still
+    # in the supervisor node — `add_messages` only assigns an id when `ai` is written to the channel,
+    # AFTER this. Without a pinned id the card would carry `message_id=None` and never render inline
+    # (and would bind to a different id than the message finally persisted). The capability agents dodge
+    # this because their message is already in the channel (id assigned) before their ToolNode pushes.
+    if getattr(ai, "id", None) is None:
+        update["id"] = str(uuid4())
+    ai = ai.model_copy(update=update)
+    for call in present_calls:
+        push_surface((call.get("args") or {}).get("blocks"), ai)
+    return ai
 
 
 DASHBOARD_INSTRUCTIONS = (
@@ -362,9 +405,17 @@ def build_orchestrator(
         analytics_graph = build_analytics_graph(settings=settings, store=store)
     if marketing_graph is None:
         # auto_choose=False adds the interactive concept-pick gate (generative-UI selection) before
-        # the script-review gate; the app surfaces both, evals/tests keep the single script gate.
+        # the copy-review gate; the app surfaces both, evals/tests keep the single copy gate.
+        # auto_approve_stills=False adds the visual gate (approve/re-roll the generated stills before
+        # the post is finalized) — but only when real images are being generated (openrouter renderer)
+        # and the gate is enabled, since the placeholder has no stills to review.
+        review_stills = settings.stills_review_enabled and settings.renderer == "openrouter"
         marketing_graph = build_marketing_graph(
-            settings=settings, store=store, auto_approve=False, auto_choose=False
+            settings=settings,
+            store=store,
+            auto_approve=False,
+            auto_choose=False,
+            auto_approve_stills=not review_stills,
         )
     if dashboard_model is None:
         # Composes the generative-UI dashboard from an analytics answer — a with_structured_output
@@ -395,12 +446,34 @@ def build_orchestrator(
         # tool-call → Command(goto=...)), or finish. Capabilities return here, so it can chain them.
         messages = state["messages"]
         capped = _handoff_count(messages) >= MAX_DELEGATIONS
-        # Past the delegation cap → drop the tools so the model can only answer (no more hops).
-        model = supervisor_model if capped else supervisor_model.bind_tools(HANDOFF_TOOLS)
-        instructions = SUPERVISOR_INSTRUCTIONS + (
+        # Past the delegation cap → drop the HANDOFF tools so the model can only answer (no more hops).
+        # `present_ui` stays bound either way: it's not a delegation (it renders a card on the
+        # supervisor's OWN direct reply), so it doesn't count against the cap and is still useful when
+        # the supervisor is forced to answer directly.
+        model = supervisor_model.bind_tools([present_ui] if capped else [*HANDOFF_TOOLS, present_ui])
+        # Fill the workspace-scope placeholder from the granted Google scopes (single source of
+        # truth), so the router always knows workspace's real reach (Sheets/Docs/Drive/Tasks, not
+        # just email) and stops refusing actions it can actually delegate.
+        instructions = SUPERVISOR_INSTRUCTIONS.replace(
+            "{workspace_scope}", settings.workspace_scope_summary()
+        ) + (
             "\n\nYou have delegated as much as allowed — answer the user directly now; do not "
             "delegate." if capped else ""
         )
+        # Memory-aware: fold shared knowledge (brand/definitions/ops) + this operator's saved context
+        # into the supervisor prompt, so BOTH its routing and its direct clarifying replies reflect
+        # long-term memory. "" when nothing is seeded / no signed-in operator, so the block is appended
+        # only when non-empty and scripted-model tests (which ignore the prompt) are unaffected.
+        mem = recall_block(current_store(), current_config(), _last_user_text(messages))
+        if mem:
+            instructions += "\n\n" + mem
+        # Live runtime context (current date + operator timezone) so the supervisor reasons about
+        # "today"/"tomorrow" correctly and hands a capability a task with a concrete date/timezone
+        # instead of a relative one it can't resolve. Appended last (most volatile) after the cacheable
+        # prefix; "" (e.g. CLI, no client info) leaves the prompt unchanged.
+        rc = runtime_context_block(current_config())
+        if rc:
+            instructions += "\n\n" + rc
         try:
             ai = model.invoke([SystemMessage(content=instructions), *messages])
         except Exception as exc:  # noqa: BLE001 — a flaky supervisor shouldn't crash the turn
@@ -454,6 +527,9 @@ def build_orchestrator(
         if _capability_answered_this_turn(messages):
             log.info("supervisor.done")
             return Command(goto=END)
+        # A direct supervisor reply may carry a present_ui card: render it and strip the (unexecuted)
+        # tool-call so it doesn't dangle into the next hop. No-op if present_ui wasn't called.
+        ai = _render_supervisor_ui(ai)
         log.info("supervisor.clarify")
         return Command(goto=END, update={"messages": [ai]})
 
@@ -507,7 +583,7 @@ def build_orchestrator(
         # If the subgraph interrupts (concept_pick / human_review), this bubbles up and pauses the
         # orchestrator; on resume the node re-runs and the subgraph continues from its checkpoint.
         result = marketing_graph.invoke(initial_marketing_state(request, product_hint), config)
-        brief = result.get("brief")  # VideoBrief dict, or None if rejected at review
+        brief = result.get("brief")  # PostBrief dict, or None if rejected at review
         if brief is None:  # rejected at review
             return {"messages": [AIMessage(content="Creative cancelled — no brief produced.")]}
         # Format the summary + attach the gen-UI cards. Guard THIS post-result block (NOT the
@@ -516,34 +592,27 @@ def build_orchestrator(
         # workspace node's "never crash, degrade" contract.
         try:
             summary = (
-                f"Video brief ready for {brief['product_name']}: \"{brief['concept']}\" — hook: "
-                f"\"{brief['hook']}\". {len(brief['shots'])} shots, "
-                f"~{brief['target_duration_s']:.0f}s, "
-                f"CTA: {brief['cta']}. Render: {result.get('render_result', {}).get('status')}."
+                f"Instagram post ready for {brief['product_name']}: \"{brief['concept']}\" — hook: "
+                f"\"{brief['hook']}\". {len(brief['shots'])} images, "
+                f"CTA: {brief['cta']}."
             )
             final = AIMessage(content=summary)
             # Generative UI: the finished workflow's artifacts as cards on the same channel the
             # analytics dashboard uses (push_ui_message → LoadExternalComponent). The brief is the
-            # headline; storyboard / script-timeline / critique are the supporting detail.
-            push_ui_message("video_brief", {"brief": brief}, message=final)
+            # headline; storyboard / critique are the supporting detail.
+            push_ui_message("post_brief", {"brief": brief}, message=final)
             if result.get("shots"):
                 push_ui_message(
                     "marketing_storyboard",
                     {"shots": result["shots"], "shot_prompts": result.get("shot_prompts") or []},
                     message=final,
                 )
-            if brief.get("script_beats"):
-                push_ui_message(
-                    "marketing_script_timeline",
-                    {"script_beats": brief["script_beats"]},
-                    message=final,
-                )
             if result.get("critique"):
                 push_ui_message("marketing_critique", result["critique"], message=final)
-            # Real-render card: hero image + per-shot stills, plus the video job ids the UI polls.
+            # Rendered-post card: the hero image + per-shot stills that make up the Instagram post.
             # Skipped for the placeholder/cancelled renderer (nothing to show).
             render_result = result.get("render_result")
-            if render_result and render_result.get("status") in ("rendering", "rendered", "error"):
+            if render_result and render_result.get("status") in ("rendered", "error"):
                 push_ui_message("marketing_render", render_result, message=final)
             return {"messages": [final]}
         except Exception as exc:  # noqa: BLE001 — malformed brief → degrade to text, never crash the turn
@@ -574,9 +643,16 @@ def build_orchestrator(
         # user so it never lands in state. Fine for a Testing-mode demo with short-lived tokens.
         if not token:
             return {"messages": [AIMessage(content=CONNECT_MSG)]}
+        # Memory-aware: the workspace agent acts on the operator's OWN Google account, so their saved
+        # preferences (default Drive folder, signature, usual recipients) matter most here. Fold
+        # shared + per-user memory into its system prompt for this run ("" → prompt unchanged).
+        memory_context = recall_block(current_store(), config, _last_user_text(state["messages"]))
         try:
             new_messages = await workspace_agent(
-                state["messages"], access_token=token, config=config
+                state["messages"],
+                access_token=token,
+                config=config,
+                memory_context=memory_context,
             )
         except GraphBubbleUp:
             # A HITL `interrupt()` inside the workspace agent raises GraphInterrupt, which IS an
@@ -586,16 +662,29 @@ def build_orchestrator(
             # like marketing's deliberately-unwrapped `.invoke()` (see the marketing node above).
             raise
         except ValueError as exc:
-            # The middleware HITL path raises ValueError when the resume decisions don't line up with
-            # the pending writes (count/shape mismatch). Surface that accurately instead of letting the
-            # broad except below mislabel it a connection failure. No write ran (safe); the operator
-            # can re-open the approval and confirm.
-            log.info("workspace.approval_mismatch", error=str(exc))
+            # ONLY a genuine approval-shape mismatch from HumanInTheLoopMiddleware ("Unexpected human
+            # decision … is not allowed for tool …") gets the approval-specific message. Do NOT assume
+            # every ValueError is an approval problem: a tool-result-shape ValueError used to bubble up
+            # here and get mislabeled "the approval didn't line up" when the approval was actually fine
+            # and the tool ran (the create_spreadsheet content_and_artifact bug). Report anything else
+            # honestly as a failed action instead of blaming the operator's approval.
+            msg = str(exc)
+            if "human decision" in msg or "is not allowed for tool" in msg:
+                log.info("workspace.approval_mismatch", error=msg)
+                return {
+                    "messages": [
+                        AIMessage(
+                            content="I couldn't apply that approval — the response didn't line up "
+                            "with the pending actions. Please open the approval again and confirm."
+                        )
+                    ]
+                }
+            log.info("workspace.failed", error=msg)
             return {
                 "messages": [
                     AIMessage(
-                        content="I couldn't apply that approval — the response didn't line up with "
-                        "the pending actions. Please open the approval again and confirm."
+                        content="I hit an error completing that Google Workspace action. Please try "
+                        "that request again."
                     )
                 ]
             }
@@ -630,6 +719,12 @@ def build_orchestrator(
             for tc in (getattr(m, "tool_calls", None) or [])
             if tc.get("name") and tc.get("id") not in rejected_ids
         ]
+        # Re-emit any generative-UI surfaces the agent authored mid-answer via present_ui. This
+        # imperative node's inner loop runs on a disjoint state whose `ui` channel is discarded (only
+        # its messages are returned), so — unlike the analytics subgraph, which propagates its `ui`
+        # channel up — the cards can't reach the top-level thread on their own. Push them here at the
+        # orchestrator level, each associated with the AI message that authored it. Best-effort.
+        emit_present_ui_from_messages(new_messages)
         final = next((m for m in reversed(new_messages) if isinstance(m, AIMessage)), None)
         if final is not None:
             push_ui_message("workspace_actions", {"tools": tools_used}, message=final)

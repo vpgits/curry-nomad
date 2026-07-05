@@ -8,22 +8,20 @@ import pytest
 
 from nora.config import Settings, get_settings
 from nora.observability import get_logger, setup_logging
-from nora.schemas import ScriptBeat, Shot, ShotPrompt, VideoBrief
+from nora.schemas import PostBrief, Shot, ShotPrompt
 from nora.services.renderer import OpenRouterRenderer, PlaceholderRenderer, get_renderer
 from tests.fakes import FakeOpenRouterClient
 
 
-def _brief() -> VideoBrief:
-    return VideoBrief(
+def _brief() -> PostBrief:
+    return PostBrief(
         product_name="Black Pepper",
         concept="bold",
         hook="Kandy heat",
-        target_duration_s=30,
-        script_beats=[ScriptBeat(t_start_s=0, t_end_s=3, voiceover="hi")],
-        shots=[Shot(index=0, scene_description="x", duration_s=30)],
-        shot_prompts=[ShotPrompt(index=0, t2v_prompt="x")],
+        caption="Kandy heat.\nSingle-origin black pepper from the hills. Shop now.",
+        shots=[Shot(index=0, scene_description="x", on_screen_text="Kandy heat")],
+        shot_prompts=[ShotPrompt(index=0, image_prompt="x")],
         cta="Shop now",
-        music_mood="warm",
         hashtags=["#CurryNomad"],
         product_facts_used=["Black Pepper", "origin: Kandy"],
     )
@@ -59,38 +57,35 @@ def test_offline_suite_pins_placeholder_renderer():
 
 
 def test_placeholder_render_makes_no_external_call():
-    result = PlaceholderRenderer().render(_brief())
+    result = PlaceholderRenderer().render_stills(_brief())
     assert result["status"] == "placeholder"
-    assert result["mode"] == "none"
     assert result["shots"] == []
 
 
-def test_openrouter_renderer_text_to_video_fallback(tmp_path):
-    # No public media base URL → OpenRouter can't fetch a localhost first frame → text→video.
-    settings = Settings(media_dir=tmp_path, media_public_base_url=None)
+def test_openrouter_renderer_generates_stills(tmp_path):
+    # The real adapter (fake client) generates a hero + per-shot still for the Instagram post.
+    settings = Settings(media_dir=tmp_path)
     client = FakeOpenRouterClient()
-    result = OpenRouterRenderer(settings, client=client).render(_brief())
+    result = OpenRouterRenderer(settings, client=client).render_stills(_brief())
 
-    assert result["status"] == "rendering"
-    assert result["mode"] == "text_to_video"
+    assert result["status"] == "stills_ready"
     assert result["hero_image_url"].startswith("/media/")
     assert len(result["shots"]) == 1
-    shot = result["shots"][0]
-    assert shot["image_url"].startswith("/media/") and shot["video_job_id"]
-    # text→video: no first frame was sent; and the image bytes were actually written under media_dir.
-    assert client.video_calls[0]["first_frame_url"] is None
-    assert list(tmp_path.rglob("*.png"))
+    assert result["shots"][0]["image_url"].startswith("/media/")
+    # the image bytes were actually written under media_dir (hero + shots).
+    assert client.image_calls and list(tmp_path.rglob("*.png"))
 
 
-def test_openrouter_renderer_image_to_video_when_public_base_set(tmp_path):
-    # A public base URL → the still is passed as the first frame (image→video).
-    settings = Settings(media_dir=tmp_path, media_public_base_url="https://pub.example")
+def test_openrouter_renderer_regenerate_reuses_media_dir(tmp_path):
+    # Re-rolling reuses the same media sub-dir so untouched stills stay valid.
+    settings = Settings(media_dir=tmp_path)
     client = FakeOpenRouterClient()
-    result = OpenRouterRenderer(settings, client=client).render(_brief())
-
-    assert result["mode"] == "image_to_video"
-    first_frame = client.video_calls[0]["first_frame_url"]
-    assert first_frame and first_frame.startswith("https://pub.example/media/")
+    renderer = OpenRouterRenderer(settings, client=client)
+    stills = renderer.render_stills(_brief())
+    before = len(client.image_calls)
+    updated = renderer.regenerate_stills(_brief(), stills, [-1], {})  # -1 = hero, always re-generated
+    assert len(client.image_calls) > before
+    assert updated["render_id"] == stills["render_id"]
 
 
 def test_openrouter_renderer_needs_a_key_or_client():
@@ -98,4 +93,15 @@ def test_openrouter_renderer_needs_a_key_or_client():
     # non-rendering turn needs no key); RENDERING without a key/client fails loudly.
     renderer = OpenRouterRenderer(Settings(openrouter_api_key=None))  # no raise at construction
     with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):
-        renderer.render(_brief())
+        renderer.render_stills(_brief())
+
+
+def test_openrouter_client_headers_are_header_safe():
+    # HTTP header values must be latin-1/ASCII-encodable. A non-ASCII char (an em-dash in X-Title)
+    # only blows up on the first REAL request (UnicodeEncodeError), so it slipped through until real
+    # rendering ran — pin every configured header to latin-1 here.
+    from nora.services.openrouter import HttpOpenRouterClient
+
+    client = HttpOpenRouterClient(api_key="test-key", base_url="https://example.com")
+    for value in client._client.headers.values():
+        value.encode("latin-1")  # raises UnicodeEncodeError if a header carries a non-latin-1 char

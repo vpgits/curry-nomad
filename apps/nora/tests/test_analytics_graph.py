@@ -100,6 +100,32 @@ def test_query_guard_forces_a_query_after_a_narration():
     assert "Ceylon Cinnamon" in result["messages"][-1].content
 
 
+def test_query_guard_hides_the_spurious_first_pass_refusal():
+    """When the model spuriously REFUSES on its first pass ("I can't complete that request.") before
+    querying, the guard rescues the turn — and the phantom refusal must NOT survive as a visible
+    message above the real answer. It's dropped and replaced by an empty, `do-not-render-` placeholder
+    (empty → the answer extractor skips it; the id → the web client hides it), while still counting
+    toward the guard's single-retry bound."""
+    refusal = "I'm sorry, but I can't complete that request."
+    model = ScriptedChatModel(
+        [
+            ai_final(refusal),  # spurious first-pass refusal, no tool call
+            ai_tool_call("run_sql", {"query": "SELECT name FROM products LIMIT 1"}, "c1"),
+            ai_final("Your top product is Ceylon Cinnamon (Alba)."),
+        ]
+    )
+    graph = build_analytics_graph(model=model)
+    result = graph.invoke({"messages": [HumanMessage(content="what's our best seller?")]})
+
+    # The real answer is delivered…
+    assert "Ceylon Cinnamon" in result["messages"][-1].content
+    # …and the refusal is gone from every VISIBLE message (mirrors the web client's do-not-render filter).
+    visible = [m for m in result["messages"] if not str(getattr(m, "id", "") or "").startswith("do-not-render-")]
+    assert not any(refusal in (getattr(m, "content", "") or "") for m in visible), (
+        "the spurious refusal must not render above the answer"
+    )
+
+
 def test_query_guard_bounds_to_one_nudge_then_terminates():
     """The guard is bounded: a first tool-less reply is nudged ONCE; a second tool-less reply ends the
     loop (no infinite nudging) — so a stubborn or genuinely no-data answer still terminates."""

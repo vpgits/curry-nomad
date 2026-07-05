@@ -29,6 +29,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+# Load the repo-root .env so a standalone `uv run` of this script sees OPENAI_API_KEY. The store's
+# embedder reads that key straight from the environment (it's deliberately NOT a Settings field, and
+# neither `uv run` nor pydantic-settings export it), so without this the embed init dies with
+# `OpenAIError: Missing credentials`. Guarded + override=False: a no-op if python-dotenv is missing,
+# and a real env var (docker/compose/aegra) always wins over the file.
+try:
+    from dotenv import load_dotenv  # noqa: E402
+
+    load_dotenv(Path(__file__).resolve().parents[3] / ".env")
+except ImportError:
+    pass
+
 from langchain.embeddings import init_embeddings  # noqa: E402
 
 from nora.config import get_settings  # noqa: E402

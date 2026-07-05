@@ -46,19 +46,23 @@ from __future__ import annotations
 import inspect
 import json
 from collections.abc import Callable, Sequence
+from typing import Annotated
 
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.ui import AnyUIMessage, ui_message_reducer
 from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 
 from nora.analytics.graph import should_continue  # reuse: "tools" if last.tool_calls else END
 from nora.config import Settings, get_settings
 from nora.observability import get_logger
+from nora.runtime_context import runtime_context_block
 from nora.schemas import ApprovalLayout
 from nora.state import AnalyticsState
+from nora.ui_tools import present_ui
 
 log = get_logger(__name__)
 
@@ -73,11 +77,40 @@ WriteToolPredicate = Callable[[str], bool]
 
 WORKSPACE_SYSTEM_PROMPT = (
     "You are Nora, Curry Nomad's operations assistant, acting on the operator's own Google "
-    "Workspace account. Use the available tools to carry out the request — send or draft an email, "
-    "read or create a calendar event, etc. Only claim an action you actually performed via a tool; "
-    "never fabricate a result. When done, reply with a short, plain confirmation of what you did "
-    "(who/what/when), or ask one concise clarifying question if the request is ambiguous."
+    "Workspace account. Use the available tools to carry out the request — for example create or "
+    "edit a Google Sheet (build a spreadsheet, add tabs, write values), edit a Google Doc, manage "
+    "Google Tasks, search Google Drive, or draft/send an email. Only claim an action you actually "
+    "performed via a tool; never fabricate a result. When done, reply with a short, plain "
+    "confirmation of what you did (who/what/when), or ask one concise clarifying question if the "
+    "request is ambiguous."
 )
+
+
+def _workspace_system_prompt(settings: Settings) -> str:
+    """The workspace agent's system prompt with its available Google tools spelled out from the
+    granted scopes (`settings.workspace_scope_summary()`), so what the agent believes it can do is
+    derived from the real grant — not a hand-written list that drifts. Falls back to the static
+    WORKSPACE_SYSTEM_PROMPT shape but with the concrete scope line prepended."""
+    return (
+        "You are Nora, Curry Nomad's operations assistant, acting on the operator's own Google "
+        f"Workspace account. Your available Google tools cover: {settings.workspace_scope_summary()}. "
+        "The supervisor has delegated this to you — you may see a `to_workspace` handoff call and a "
+        "'Handing off to workspace.' note in the history. THAT is your assignment; carry it out with "
+        "your tools. Do NOT reply that you can't do it, or that you lack a tool, before you have "
+        "actually tried — inspect the available tools and call the right one (a calendar action uses "
+        "the event tool, an email uses the Gmail tool, and so on). "
+        "Use them to carry out the request — for example create or edit a Google Sheet (build a "
+        "spreadsheet, add tabs, write values), edit a Doc, manage Tasks, search Drive, or draft/send "
+        "an email. Only claim an action you actually performed via a tool; never fabricate a result. "
+        "Use your judgment about showing a result as an inline card with present_ui: when you've "
+        "created or found something worth showing — a calendar event, an email, a task, a doc, a "
+        "spreadsheet, or a list of items — render it ALONGSIDE your written confirmation: a `fields` "
+        "card for one thing's details (e.g. Title / When / Where / Attendees for an event), a `table` "
+        "for several items, `metrics` tiles for a few numbers. Skip the card for a trivial reply, a "
+        "bare yes/no, or a clarifying question — just answer in words. When done, reply with a short, "
+        "plain confirmation of what you did, or ask one concise clarifying question if the request is "
+        "ambiguous."
+    )
 
 # --- the human-approval gate ----------------------------------------------------------
 
@@ -187,14 +220,15 @@ def _make_mcp_tools_provider(settings: Settings) -> ToolsProvider:
     return provider
 
 
-def _make_llm_node(model_with_tools):
+def _make_llm_node(model_with_tools, system_prompt: str = WORKSPACE_SYSTEM_PROMPT):
     """The shared `llm` node (identical across all three HITL modes) — propose the next tool call(s)
     or the final answer. Async so the loop runs on the orchestrator's event loop (MCP tools are
-    coroutine-only)."""
+    coroutine-only). `system_prompt` defaults to the base prompt but the orchestrator passes it
+    augmented with recalled memory (see `build_workspace_agent.arun`)."""
 
     async def llm_node(state: AnalyticsState) -> dict:
         response = await model_with_tools.ainvoke(
-            [SystemMessage(content=WORKSPACE_SYSTEM_PROMPT), *state["messages"]]
+            [SystemMessage(content=system_prompt), *state["messages"]]
         )
         # Same termination guard as analytics (this loop reuses AnalyticsState's `remaining_steps`):
         # if the step budget is nearly spent but the model still wants tools, stop with a plain answer
@@ -253,8 +287,9 @@ def _normalize_decisions(raw, n: int) -> list[dict]:
 
 APPROVAL_LAYOUT_INSTRUCTIONS = (
     "You compose a compact APPROVAL CARD for a pending Google Workspace WRITE action that a human is "
-    "about to approve before it runs. Choose an `icon` (email / calendar / document / generic), a "
-    "short `title` (e.g. 'Send email', 'Draft email', 'Create calendar event'), and an ordered list "
+    "about to approve before it runs. Choose an `icon` (email / calendar / document / generic — use "
+    "'document' for Sheets/Docs/Drive/Tasks actions), a short `title` (e.g. 'Send email', 'Create "
+    "spreadsheet', 'Update spreadsheet', 'Edit doc', 'Add task'), and an ordered list "
     "of `fields`. Each field has a human `label`, the `arg_key` it reads its value from (use the EXACT "
     "argument keys given — never invent or paraphrase values; the system fills the value), and a "
     "`style`: 'block' for long free text like an email body, 'inline' for short values like a "
@@ -400,10 +435,10 @@ def _make_gated_tools_node(
 # --- compile paths (one per HITL mode) ------------------------------------------------
 
 
-def _compile_loop(model, tools: Sequence[BaseTool]):
+def _compile_loop(model, tools: Sequence[BaseTool], system_prompt: str = WORKSPACE_SYSTEM_PROMPT):
     """The ungated loop ("off"): the original llm↔ToolNode loop, writes run straight through."""
     builder = StateGraph(AnalyticsState)
-    builder.add_node("llm", _make_llm_node(model.bind_tools(tools)))
+    builder.add_node("llm", _make_llm_node(model.bind_tools(tools), system_prompt))
     builder.add_node("tools", ToolNode(tools, handle_tool_errors=handle_workspace_error))
     builder.add_edge(START, "llm")
     builder.add_conditional_edges("llm", should_continue, ["tools", END])
@@ -412,12 +447,16 @@ def _compile_loop(model, tools: Sequence[BaseTool]):
 
 
 def _compile_loop_gated(
-    model, tools: Sequence[BaseTool], is_write: WriteToolPredicate, layout_model=None
+    model,
+    tools: Sequence[BaseTool],
+    is_write: WriteToolPredicate,
+    layout_model=None,
+    system_prompt: str = WORKSPACE_SYSTEM_PROMPT,
 ):
     """The "primitive" loop (path B): same shape, but the `tools` node is the hand-rolled gate that
     pauses on write actions via `interrupt()` (and AI-authors the approval card via `layout_model`)."""
     builder = StateGraph(AnalyticsState)
-    builder.add_node("llm", _make_llm_node(model.bind_tools(tools)))
+    builder.add_node("llm", _make_llm_node(model.bind_tools(tools), system_prompt))
     builder.add_node("tools", _make_gated_tools_node(tools, is_write, layout_model))
     builder.add_edge(START, "llm")
     builder.add_conditional_edges("llm", should_continue, ["tools", END])
@@ -438,6 +477,13 @@ def _self_correcting(tool: BaseTool) -> BaseTool:
 
     async def gated(**kwargs):
         try:
+            # `tool.ainvoke(args)` already UNWRAPS a content_and_artifact tool down to its content
+            # (a list of content blocks), so the wrapper below MUST declare response_format="content".
+            # Declaring content_and_artifact (copied from the MCP tool) made LangChain expect a
+            # 2-tuple back from `gated` and raise "Since response_format='content_and_artifact' a
+            # two-tuple ... is expected. Instead ... list." on the FIRST approved write (e.g.
+            # create_spreadsheet). That ValueError then bubbled up and got mislabeled as an approval
+            # mismatch. The raw artifact isn't consumed downstream here — the model reads the content.
             return await tool.ainvoke(kwargs)
         except ToolException as exc:
             return handle_workspace_error(exc)
@@ -447,16 +493,22 @@ def _self_correcting(tool: BaseTool) -> BaseTool:
         name=tool.name,
         description=tool.description,
         args_schema=tool.args_schema,
-        # Carry the original tool's metadata forward so re-wrapping doesn't silently drop it — in
-        # particular `response_format` (MCP tools may return content_and_artifact) so artifacts survive.
+        # Carry the original tool's metadata/tags/return_direct forward so re-wrapping doesn't
+        # silently drop them.
         metadata=getattr(tool, "metadata", None),
         tags=getattr(tool, "tags", None),
         return_direct=getattr(tool, "return_direct", False),
-        response_format=getattr(tool, "response_format", "content"),
+        # `gated` returns already-unwrapped content (or a self-correction string), never a 2-tuple.
+        response_format="content",
     )
 
 
-def _compile_middleware_agent(model, tools: Sequence[BaseTool], is_write: WriteToolPredicate):
+def _compile_middleware_agent(
+    model,
+    tools: Sequence[BaseTool],
+    is_write: WriteToolPredicate,
+    system_prompt: str = WORKSPACE_SYSTEM_PROMPT,
+):
     """The "middleware" agent (path A, the DEFAULT): the prebuilt `create_agent` with
     `HumanInTheLoopMiddleware` gating the write tools. The contrast with path B — the framework's
     after-model hook raises the interrupt and applies the decisions, instead of the hand-written gate
@@ -466,16 +518,28 @@ def _compile_middleware_agent(model, tools: Sequence[BaseTool], is_write: WriteT
 
     Tools are wrapped with `_self_correcting` so a recoverable `ToolException` still becomes a
     ToolMessage the model repairs (the prebuilt agent doesn't do this on its own) — keeping the
-    self-correcting tool loop that the hand-written path has natively."""
+    self-correcting tool loop that the hand-written path has natively. The local `present_ui` tool is
+    the ONE exception: it's left UNWRAPPED because the shim copies args_schema + forces
+    response_format='content', which strips its `InjectedState` injection — and it can't raise a
+    ToolException anyway (it's a best-effort local UI push). A custom `state_schema` gives it a real
+    `ui` channel so its inline card write doesn't hit an undeclared-channel warning."""
     from langchain.agents import create_agent
-    from langchain.agents.middleware import HumanInTheLoopMiddleware
+    from langchain.agents.middleware import AgentState, HumanInTheLoopMiddleware
 
-    tools = [_self_correcting(t) for t in tools]
-    interrupt_on = {t.name: True for t in tools if is_write(t.name)}
+    wrapped = [t if t.name == present_ui.name else _self_correcting(t) for t in tools]
+    interrupt_on = {t.name: True for t in wrapped if is_write(t.name)}
+
+    class _WorkspaceMiddlewareState(AgentState):
+        # Mirror the orchestrator's channel so present_ui's card lands somewhere real; the surface is
+        # re-emitted at the orchestrator level regardless (this loop's state is discarded), so this is
+        # purely to keep the middleware path warning-clean.
+        ui: Annotated[Sequence[AnyUIMessage], ui_message_reducer]
+
     return create_agent(
         model=model,
-        tools=list(tools),
-        system_prompt=WORKSPACE_SYSTEM_PROMPT,
+        tools=list(wrapped),
+        system_prompt=system_prompt,
+        state_schema=_WorkspaceMiddlewareState,
         middleware=[
             HumanInTheLoopMiddleware(
                 interrupt_on=interrupt_on,
@@ -515,7 +579,9 @@ def build_workspace_agent(
     write_pred = is_write or is_write_tool
     _model = model  # may be None → built lazily on first run (so flag-on build needs no key at import)
 
-    async def arun(messages: list, *, access_token: str, config=None) -> list[BaseMessage]:
+    async def arun(
+        messages: list, *, access_token: str, config=None, memory_context: str = ""
+    ) -> list[BaseMessage]:
         nonlocal _model
         if _model is None:
             _model = init_chat_model(settings.model_for("workspace"), temperature=0, streaming=True)
@@ -524,15 +590,32 @@ def build_workspace_agent(
         tools = provider(access_token=access_token)
         if inspect.isawaitable(tools):
             tools = await tools
+        # Add the generative-UI authoring tool so the workspace agent can render a table/metrics/chart
+        # card inline (e.g. a table of matched emails). It's a read-like local tool (never gated), and
+        # the orchestrator's workspace node re-emits whatever surfaces it authored — see
+        # `ui_tools.emit_present_ui_from_messages` (this imperative loop's `ui` channel is discarded).
+        tools = [*tools, present_ui]
+        # Base prompt is derived from the granted scopes (so the agent knows its real Sheets/Docs/
+        # Drive/Tasks reach), then folded with any recalled long-term memory the orchestrator computed
+        # from the runtime store, then the live runtime context (current date + operator timezone) so
+        # a calendar/date request resolves without asking "which timezone is 'today 5pm'?". Both are
+        # appended AFTER the static base prompt so the cacheable prefix stays stable. Empty → unchanged.
+        base_prompt = _workspace_system_prompt(settings)
+        runtime_context = runtime_context_block(config)
+        system_prompt = (
+            base_prompt
+            + (f"\n\n{memory_context}" if memory_context else "")
+            + (f"\n\n{runtime_context}" if runtime_context else "")
+        )
         # Compile the loop for THIS run's tool set + HITL mode. Recompiled per run (the tool set is
         # per-operator); resume works through the recompile because LangGraph keys subgraph
         # checkpoints on the node-name/structural path, not object identity, and we forward `config`.
         if mode == "middleware":
-            agent = _compile_middleware_agent(_model, tools, write_pred)
+            agent = _compile_middleware_agent(_model, tools, write_pred, system_prompt)
         elif mode == "primitive":
-            agent = _compile_loop_gated(_model, tools, write_pred, layout_model)
+            agent = _compile_loop_gated(_model, tools, write_pred, layout_model, system_prompt)
         else:
-            agent = _compile_loop(_model, tools)
+            agent = _compile_loop(_model, tools, system_prompt)
         # Drive the loop async: MCP tools are coroutine-only, and the orchestrator is already on the
         # event loop (Aegra `astream`, the CLI `astream`), so we await directly — no `asyncio.run`.
         result = await agent.ainvoke({"messages": messages}, config)

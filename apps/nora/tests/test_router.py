@@ -35,10 +35,10 @@ def _cfg(thread_id: str) -> dict:
 
 
 def _brief_from_ui(result) -> dict | None:
-    """The marketing brief rides the generative-UI channel now (push_ui_message("video_brief",
+    """The marketing brief rides the generative-UI channel now (push_ui_message("post_brief",
     {"brief": ...})), not additional_kwargs — pull it back out of result["ui"]."""
     for ui in result.get("ui", []):
-        if ui.get("name") == "video_brief":
+        if ui.get("name") == "post_brief":
             return ui["props"]["brief"]
     return None
 
@@ -110,7 +110,7 @@ def test_marketing_request_routes_and_carries_product_hint():
             [
                 ai_tool_call(
                     "to_marketing",
-                    {"task": "make a 30s reel", "product_hint": "Roasted Curry Powder"},
+                    {"task": "make an Instagram post", "product_hint": "Roasted Curry Powder"},
                     "h1",
                 ),
                 ai_final(""),
@@ -120,7 +120,7 @@ def test_marketing_request_routes_and_carries_product_hint():
         marketing_graph=build_marketing_graph(model=_passing_model(), auto_approve=True),
         checkpointer=InMemorySaver(),
     )
-    result = orch.invoke({"messages": [HumanMessage("make a 30s reel for it")]}, _cfg("m1"))
+    result = orch.invoke({"messages": [HumanMessage("make an Instagram post for it")]}, _cfg("m1"))
     # product_hint flowed through the handoff into the marketing run and grounded the brief.
     brief = _brief_from_ui(result)
     assert "Roasted Curry Powder" in brief["product_name"]
@@ -131,7 +131,7 @@ class _MalformedMarketingGraph:
     orchestrator's marketing node degrades to text instead of KeyError-crashing the turn."""
 
     def invoke(self, state, config=None):  # noqa: ARG002 — ignores input by design
-        return {"brief": {"concept": "Bold idea"}}  # no product_name/hook/shots/target_duration_s/cta
+        return {"brief": {"concept": "Bold idea"}}  # no product_name/hook/shots/cta
 
 
 def test_marketing_malformed_brief_degrades_to_text():
@@ -139,16 +139,16 @@ def test_marketing_malformed_brief_degrades_to_text():
     turn on brief['product_name']. The marketing node guards its post-invoke formatting block."""
     orch = build_orchestrator(
         supervisor_model=ScriptedChatModel(
-            [ai_tool_call("to_marketing", {"task": "make a reel"}, "h1"), ai_final("")]
+            [ai_tool_call("to_marketing", {"task": "make an Instagram post"}, "h1"), ai_final("")]
         ),
         analytics_graph=_dummy_analytics(),
         marketing_graph=_MalformedMarketingGraph(),
         checkpointer=InMemorySaver(),
     )
-    result = orch.invoke({"messages": [HumanMessage("make a reel")]}, _cfg("m-bad"))
+    result = orch.invoke({"messages": [HumanMessage("make an Instagram post")]}, _cfg("m-bad"))
     assert "couldn't assemble" in result["messages"][-1].content
-    # No video_brief card was emitted for the malformed brief.
-    assert not any(ui.get("name") == "video_brief" for ui in result.get("ui", []))
+    # No post_brief card was emitted for the malformed brief.
+    assert not any(ui.get("name") == "post_brief" for ui in result.get("ui", []))
 
 
 def test_ambiguous_request_asks_to_clarify():
@@ -156,7 +156,7 @@ def test_ambiguous_request_asks_to_clarify():
     node is gone; the supervisor absorbs it)."""
     orch = build_orchestrator(
         supervisor_model=ScriptedChatModel(
-            [ai_final("I can answer a data question, or make a video ad. Which would you like?")]
+            [ai_final("I can answer a data question, or make an Instagram post. Which would you like?")]
         ),
         analytics_graph=_dummy_analytics(),
         marketing_graph=build_marketing_graph(model=_passing_model(), auto_approve=True),
@@ -180,7 +180,7 @@ def test_supervisor_failure_degrades_to_clarify():
 
 
 def test_canonical_demo_flow_on_one_thread():
-    """ask for the top product → answer → 'make a video ad for it' → pause for review → finish.
+    """ask for the top product → answer → 'make an Instagram post for it' → pause for review → finish.
 
     The supervisor is invoked twice per turn (delegate, then a silent closer when the capability
     returns), so the script is [handoff, closer, handoff, closer] across the two turns."""
@@ -191,7 +191,7 @@ def test_canonical_demo_flow_on_one_thread():
                 ai_final(""),
                 ai_tool_call(
                     "to_marketing",
-                    {"task": "make a video ad", "product_hint": "Ceylon Cinnamon (Alba)"},
+                    {"task": "make an Instagram post", "product_hint": "Ceylon Cinnamon (Alba)"},
                     "h2",
                 ),
                 ai_final(""),
@@ -215,7 +215,7 @@ def test_canonical_demo_flow_on_one_thread():
     assert "Ceylon Cinnamon" in r1["messages"][-1].content
 
     # Turn 2 — marketing delegates and pauses at human_review (interrupt bubbles up).
-    r2 = orch.invoke({"messages": [HumanMessage("great, make a video ad for it")]}, cfg)
+    r2 = orch.invoke({"messages": [HumanMessage("great, make an Instagram post for it")]}, cfg)
     assert "__interrupt__" in r2
     assert orch.get_state(cfg).interrupts
 

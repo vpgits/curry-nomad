@@ -9,7 +9,7 @@ Offline, with the same scripted fakes as the other suites:
 
 from __future__ import annotations
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
@@ -23,7 +23,7 @@ from nora.schemas import (
     AnalyticsDashboard,
     ChartPoint,
     DashboardChart,
-    VideoBrief,
+    PostBrief,
 )
 from nora.services.renderer import OpenRouterRenderer
 from tests.fakes import (
@@ -49,7 +49,7 @@ def _concept_graph(thread: str):
 
 def test_concept_pick_interrupts_with_the_concepts():
     graph, cfg = _concept_graph("concept-1")
-    result = graph.invoke(initial_marketing_state("reel", "Cloves"), cfg)
+    result = graph.invoke(initial_marketing_state("Instagram post", "Cloves"), cfg)
     assert "__interrupt__" in result
     payload = graph.get_state(cfg).interrupts[0].value
     assert payload["kind"] == "concept_pick"  # distinguishes it from the script-review gate
@@ -59,30 +59,30 @@ def test_concept_pick_interrupts_with_the_concepts():
 
 def test_concept_pick_resume_selects_the_chosen_index():
     graph, cfg = _concept_graph("concept-2")
-    graph.invoke(initial_marketing_state("reel", "Cloves"), cfg)
+    graph.invoke(initial_marketing_state("Instagram post", "Cloves"), cfg)
     # _passing_model scripts concepts angle 0..2; pick index 2 and it must drive the brief.
     result = graph.invoke(Command(resume={"chosen_index": 2}), cfg)
-    assert VideoBrief(**result["brief"]).concept == "angle 2"
+    assert PostBrief(**result["brief"]).concept == "angle 2"
 
 
 def test_concept_pick_out_of_range_falls_back_to_first():
     graph, cfg = _concept_graph("concept-3")
-    graph.invoke(initial_marketing_state("reel", "Cloves"), cfg)
+    graph.invoke(initial_marketing_state("Instagram post", "Cloves"), cfg)
     result = graph.invoke(Command(resume={"chosen_index": 99}), cfg)  # bogus index
-    assert VideoBrief(**result["brief"]).concept == "angle 0"
+    assert PostBrief(**result["brief"]).concept == "angle 0"
 
 
 def test_auto_choose_default_keeps_a_single_script_gate():
     """Default auto_choose=True must NOT add a concept interrupt — the only gate is script review.
     This is what keeps every unattended caller (evals, the other tests) unchanged."""
     graph = build_marketing_graph(model=_passing_model(), checkpointer=InMemorySaver())
-    result = graph.invoke(initial_marketing_state("reel", "Cloves"), {"configurable": {"thread_id": "auto-c"}})
+    result = graph.invoke(initial_marketing_state("Instagram post", "Cloves"), {"configurable": {"thread_id": "auto-c"}})
     payload = result["__interrupt__"][0].value
-    assert payload["kind"] == "script_review"
+    assert payload["kind"] == "copy_review"
 
 
 def _marketing_supervisor():
-    """A supervisor that delegates a Cloves video ad, then ends silently when marketing returns."""
+    """A supervisor that delegates a Cloves Instagram post, then ends silently when marketing returns."""
     return ScriptedChatModel(
         [
             ai_tool_call(
@@ -116,16 +116,16 @@ def test_orchestrator_chains_concept_then_script_gates():
 
     r2 = orch.invoke(Command(resume={"chosen_index": 1}), cfg)  # pick concept 1
     assert "__interrupt__" in r2
-    assert orch.get_state(cfg).interrupts[0].value["kind"] == "script_review"
+    assert orch.get_state(cfg).interrupts[0].value["kind"] == "copy_review"
 
     r3 = orch.invoke(Command(resume={"approved": True}), cfg)
-    brief = next((u["props"]["brief"] for u in r3.get("ui", []) if u.get("name") == "video_brief"), None)
+    brief = next((u["props"]["brief"] for u in r3.get("ui", []) if u.get("name") == "post_brief"), None)
     assert brief is not None and brief["concept"] == "angle 1"  # the chosen concept drove the brief
 
 
-def test_marketing_render_card_carries_video_jobs(tmp_path):
+def test_marketing_render_card_carries_stills(tmp_path):
     """With the OpenRouter renderer injected, a finished marketing turn pushes a `marketing_render`
-    card carrying the hero image, per-shot stills, and the video job ids the UI polls."""
+    card carrying the hero image + per-shot stills that make up the Instagram post."""
     settings = Settings(media_dir=tmp_path)
     orch = build_orchestrator(
         supervisor_model=_marketing_supervisor(),
@@ -142,9 +142,9 @@ def test_marketing_render_card_carries_video_jobs(tmp_path):
 
     card = next((u["props"] for u in r.get("ui", []) if u.get("name") == "marketing_render"), None)
     assert card is not None
-    assert card["status"] == "rendering"
+    assert card["status"] == "rendered"
     assert card["hero_image_url"].startswith("/media/")
-    assert card["shots"] and all(s["video_job_id"] for s in card["shots"])
+    assert card["shots"] and all(s["image_url"] for s in card["shots"])
 
 
 # --- analytics: the chosen chart ------------------------------------------------------
@@ -227,6 +227,115 @@ def test_authored_ui_mode_pushes_an_a2ui_surface():
     assert blocks[1]["chart_kind"] == "bar"
     # And NOT the fixed dashboard card.
     assert not any(u.get("name") == "analytics_dashboard" for u in result.get("ui", []))
+
+
+# --- present_ui: any agent authors a card mid-answer (the "un-scoped" generative UI) ------------
+#
+# Where the analytics_dashboard/marketing/workspace nodes attach a FIXED card AFTER a capability
+# finishes, `present_ui` (ui_tools.py) lets a model decide mid-answer to render an A2uiSurface. It's
+# bound to the analytics + workspace agents (they execute it in their tool loop) and the supervisor
+# (which has no ToolNode, so the node executes it). These drive each surface with a scripted fake and
+# assert the card reaches the top-level `ui` channel, correctly associated with its message.
+
+
+def _empty_dashboard_model() -> ScriptedStructuredModel:
+    """A dashboard model that returns an empty AnalyticsDashboard → `_build_dashboard` yields None, so
+    the post-hoc dashboard card is suppressed and the ONLY card is the agent's own present_ui surface
+    (keeps the assertion about the agent-authored card unambiguous)."""
+    empty = AnalyticsDashboard(title="n/a", stats=[], table=None, chart=DashboardChart(kind="none"))
+    return ScriptedStructuredModel({AnalyticsDashboard: [empty]})
+
+
+def test_analytics_agent_authors_ui_via_present_ui():
+    """The analytics AGENT renders a card mid-answer by calling present_ui. The push happens INSIDE the
+    subgraph's ToolNode; because AnalyticsState now shares the `ui` channel, the card propagates up to
+    the orchestrator's `ui` channel — associated with the tool-calling message (so it renders inline)."""
+    orch = build_orchestrator(
+        supervisor_model=ScriptedChatModel(
+            [ai_tool_call("to_analytics", {"task": "top sellers"}, "h1"), ai_final("")]
+        ),
+        analytics_graph=build_analytics_graph(
+            model=ScriptedChatModel(
+                [
+                    ai_tool_call("run_sql", {"query": "SELECT 1 AS x"}, "c1"),  # engage DB (query guard)
+                    ai_tool_call(
+                        "present_ui",
+                        {
+                            "blocks": [
+                                {"type": "heading", "text": "Top sellers"},
+                                {
+                                    "type": "chart",
+                                    "chart_kind": "bar",
+                                    "title": "Revenue by product",
+                                    "series": [
+                                        {"label": "Cinnamon", "value": 500},
+                                        {"label": "Cloves", "value": 300},
+                                    ],
+                                },
+                            ]
+                        },
+                        "c2",
+                    ),
+                    ai_final("Cinnamon leads on revenue."),
+                ]
+            )
+        ),
+        marketing_graph=object(),  # never invoked on an analytics turn
+        dashboard_model=_empty_dashboard_model(),  # suppress the post-hoc dashboard card
+        checkpointer=InMemorySaver(),
+    )
+    result = orch.invoke(
+        {"messages": [HumanMessage("top sellers?")]},
+        {"configurable": {"thread_id": "analytics-present-ui"}},
+    )
+    cards = [u for u in result.get("ui", []) if u.get("name") == "a2ui_surface"]
+    assert len(cards) == 1, "the agent-authored surface must propagate up from the analytics subgraph"
+    blocks = cards[0]["props"]["blocks"]
+    assert [b["type"] for b in blocks] == ["heading", "chart"]
+    assert blocks[1]["chart_kind"] == "bar"
+    assert [p["label"] for p in blocks[1]["series"]] == ["Cinnamon", "Cloves"]
+    # Associated with the AI message that called present_ui, so it renders inline under it.
+    author_id = cards[0]["metadata"]["message_id"]
+    assert author_id and any(m.id == author_id for m in result["messages"])
+
+
+def test_supervisor_present_ui_direct_reply_renders_and_strips_call():
+    """The SUPERVISOR can attach a present_ui card to its OWN direct reply (e.g. a capabilities
+    overview). It has no ToolNode, so the node renders the surface and STRIPS the unexecuted tool-call
+    — otherwise it would dangle into the next hop (the classic 'tool_call without a following result').
+    The reply text is kept and the card binds to that message."""
+    supervisor_msg = AIMessage(
+        content="Here's what I can help with.",
+        tool_calls=[
+            {
+                "name": "present_ui",
+                "args": {"blocks": [{"type": "metrics", "metrics": [{"label": "Capabilities", "value": "3"}]}]},
+                "id": "p1",
+                "type": "tool_call",
+            }
+        ],
+    )
+    orch = build_orchestrator(
+        supervisor_model=ScriptedChatModel([supervisor_msg]),
+        # analytics is added as a graph NODE, so it must be a callable even though this turn never
+        # delegates to it; `_stub_analytics` raises if it's ever (wrongly) invoked.
+        analytics_graph=_stub_analytics,
+        marketing_graph=object(),  # only used imperatively → never touched here
+        dashboard_model=object(),  # only used by the analytics_dashboard node → never reached
+        checkpointer=InMemorySaver(),
+    )
+    result = orch.invoke(
+        {"messages": [HumanMessage("what can you do?")]},
+        {"configurable": {"thread_id": "sup-present-ui"}},
+    )
+    cards = [u for u in result.get("ui", []) if u.get("name") == "a2ui_surface"]
+    assert len(cards) == 1
+    assert cards[0]["props"]["blocks"][0]["type"] == "metrics"
+    # The persisted supervisor message keeps its text, but the (unexecuted) present_ui call was stripped.
+    last_ai = [m for m in result["messages"] if isinstance(m, AIMessage)][-1]
+    assert last_ai.content == "Here's what I can help with."
+    assert not getattr(last_ai, "tool_calls", None)  # no dangling tool call
+    assert cards[0]["metadata"]["message_id"] == last_ai.id  # card binds to that reply
 
 
 # Note: route planning is no longer a chat capability — it lives on the ops REST API + the /routes
