@@ -1,7 +1,5 @@
 "use client";
 
-import Link from "next/link";
-
 import { Button } from "@/components/ui/button";
 import { Eyebrow } from "@/components/ui/typography";
 import { StatusPill } from "@/components/ui/status-pill";
@@ -48,14 +46,6 @@ export function OrderDrawer({ order, onMarkPacked }: { order: Order; onMarkPacke
       <div className="flex justify-between border-t pt-3 text-[13px] font-semibold">
         <span>Total</span>
         <span className="font-mono tabular-nums">{formatRupees(order.total_lkr)}</span>
-      </div>
-
-      <div className="flex items-center gap-2.5 rounded-[10px] border bg-card p-3">
-        <span className="size-2 shrink-0 rounded-full bg-info" />
-        <span className="text-[11.5px] text-muted-foreground">Joins today&apos;s route on dispatch</span>
-        <Link href="/routes" className="ml-auto shrink-0 text-[11px] text-brand-text hover:underline">
-          View →
-        </Link>
       </div>
 
       {order.status !== "dispatched" && (

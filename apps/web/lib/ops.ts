@@ -3,13 +3,7 @@
 // message the (future) agent would read and self-correct from.
 
 import { OPS_API_URL } from "@/lib/config";
-import type {
-  DeliveryInput,
-  Order,
-  OrderLineInput,
-  RoutePlan,
-  StockRow,
-} from "@/lib/ops-types";
+import type { DeliveryInput, Order, OrderLineInput, StockRow } from "@/lib/ops-types";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
@@ -54,9 +48,4 @@ export const ops = {
   }) => req<Order>("/orders", { method: "POST", body: JSON.stringify(body) }),
 
   listOrders: () => req<Order[]>("/orders"),
-
-  planRoute: () => req<RoutePlan>("/routes/plan", { method: "POST", body: JSON.stringify({}) }),
-
-  dispatchRoute: (routeId: number) =>
-    req<RoutePlan>(`/routes/${routeId}/dispatch`, { method: "POST" }),
 };

@@ -22,8 +22,7 @@ const CHART_COLORS = ["#d97706", "#0f766e", "#b45309", "#7c3aed", "#0369a1", "#b
 
 // The chart the builder model chose (bar/line/pie). A thin Recharts wrapper — the model decides the
 // kind, this just draws it. Default export so AnalyticsDashboard can next/dynamic-import it with
-// ssr:false (recharts is heavy and only renders below the fold, after a chat turn) — mirrors the
-// RouteMap → RouteMapLeaflet split.
+// ssr:false (recharts is heavy and only renders below the fold, after a chat turn).
 export default function AnalyticsDashboardChart({ chart }: { chart: DashboardChart }) {
   return (
     <div className="rounded-lg border bg-muted/20 p-3">

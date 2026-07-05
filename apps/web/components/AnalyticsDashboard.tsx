@@ -18,8 +18,7 @@ import { useStreamContext } from "@/providers/Stream";
 const EMPTY_STATS: DashboardStat[] = [];
 
 // The recharts chart is split into its own client-only chunk and next/dynamic-imported with
-// ssr:false (recharts is heavy and only renders below the fold, after a chat turn) — mirrors the
-// RouteMap → RouteMapLeaflet split.
+// ssr:false (recharts is heavy and only renders below the fold, after a chat turn).
 const DashboardChartView = dynamic(() => import("./AnalyticsDashboardChart"), { ssr: false });
 
 // The generative-UI dashboard the analytics path composes (schemas.py:AnalyticsDashboard). The

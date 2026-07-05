@@ -33,27 +33,6 @@ export interface Order {
   delivery_id: number | null;
 }
 
-export interface RouteStop {
-  seq: number;
-  delivery_id: number;
-  order_id: number;
-  address: string;
-  city: string;
-  lat: number;
-  lng: number;
-}
-
-export interface RoutePlan {
-  route_id: number;
-  vehicle: string;
-  status: string;
-  total_km: number;
-  naive_km: number;
-  est_minutes: number;
-  improvement_pct: number;
-  ordered_stops: RouteStop[];
-}
-
 export interface OrderLineInput {
   sku?: string;
   product_id?: number;

@@ -21,7 +21,6 @@ import { A2uiSurfaceView } from "@/components/A2uiSurfaceView";
 import { AnalyticsDashboard } from "@/components/AnalyticsDashboard";
 import { CritiqueCard } from "@/components/CritiqueCard";
 import { MarketingRenderCard } from "@/components/MarketingRenderCard";
-import { RouteMapCard } from "@/components/operations/RouteMapCard";
 import { PostBriefCard } from "@/components/PostBriefCard";
 import { StoryboardFilmstrip } from "@/components/StoryboardFilmstrip";
 import { WorkspaceActionsCard } from "@/components/workspace/workspace-actions-card";
@@ -41,13 +40,12 @@ const UI_COMPONENTS = {
   analytics_dashboard: AnalyticsDashboard,
   // The "Author UI" output mode: when the composer toggles ui_mode="authored", the analytics path
   // pushes this LLM-composed surface (A2uiSurface) instead of the fixed analytics_dashboard. It
-  // matches none of the marketing/routing/workspace sets below, so the turn stays labeled analytics.
+  // matches none of the marketing/workspace sets below, so the turn stays labeled analytics.
   a2ui_surface: A2uiSurfaceView,
   post_brief: PostBriefCard,
   marketing_storyboard: StoryboardFilmstrip,
   marketing_critique: CritiqueCard,
   marketing_render: MarketingRenderCard,
-  route_map: RouteMapCard,
   workspace_actions: WorkspaceActionsCard,
 };
 // ui.name values that mark a turn as the marketing workflow (drives the ModeChip).
@@ -68,21 +66,15 @@ export function NoraAvatar() {
   );
 }
 
-type TurnMode = "analytics" | "marketing" | "routing" | "workspace";
+type TurnMode = "analytics" | "marketing" | "workspace";
 
 // The mode chip beside "Nora": ink pill for the analytics agent, accent-tint pill for the marketing
-// workflow, info-tint for the deterministic routing capability — the paradigms explicit at a glance.
+// workflow, info-tint for the workspace agent — the paradigms explicit at a glance.
 function ModeChip({ mode }: { mode: TurnMode }) {
   if (mode === "marketing")
     return (
       <span className="rounded-full border border-brand-edge bg-brand-tint px-2 py-px text-[9.5px] font-semibold text-brand-text">
         Marketing workflow
-      </span>
-    );
-  if (mode === "routing")
-    return (
-      <span className="rounded-full border border-info-edge bg-info-tint px-2 py-px text-[9.5px] font-semibold text-info-text">
-        Operations
       </span>
     );
   if (mode === "workspace")
@@ -222,7 +214,7 @@ export function AssistantTurn({
   const segments = segmentTurn(messages);
 
   // The turn's headline chip: the first capability it delegated to; else inferred from the cards it
-  // pushed (route_map → routing); else a pure-supervisor turn (a clarification) → no capability chip.
+  // pushed; else a pure-supervisor turn (a clarification) → no capability chip.
   const firstHandoff = messages.reduce<ReturnType<typeof handoffOf>>(
     (found, m) => found ?? handoffOf(m),
     null,
@@ -235,11 +227,9 @@ export function AssistantTurn({
     ? firstHandoff.target
     : cards.some((ui) => MARKETING_UI.has(ui.name))
       ? "marketing"
-      : cards.some((ui) => ui.name === "route_map")
-        ? "routing"
-        : cards.some((ui) => ui.name === "workspace_actions")
-          ? "workspace"
-          : null;
+      : cards.some((ui) => ui.name === "workspace_actions")
+        ? "workspace"
+        : null;
 
   return (
     <div className="flex items-start gap-3">
@@ -406,9 +396,13 @@ function MessageBody({
       : undefined;
 
   // push_ui_message UI messages tagged to this AI message (analytics dashboard, or the marketing
-  // brief + storyboard/critique cards). Rendered regardless of whether the message has text.
+  // brief + storyboard/critique cards). Rendered regardless of whether the message has text. Skip any
+  // name we have no component for (e.g. the backend still emits `route_map`, whose card was removed) —
+  // LoadExternalComponent would otherwise try to remote-fetch it, which the local dev server can't serve.
   const uiForMessage = (stream.values.ui ?? []).filter(
-    (ui) => (ui.metadata as { message_id?: string } | undefined)?.message_id === message.id,
+    (ui) =>
+      (ui.metadata as { message_id?: string } | undefined)?.message_id === message.id &&
+      Object.hasOwn(UI_COMPONENTS, ui.name),
   );
 
   const [copied, setCopied] = useState(false);

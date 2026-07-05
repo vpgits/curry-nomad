@@ -16,8 +16,7 @@ const TREND_GLYPH: Record<string, string> = { up: "↑", down: "↓", neutral: "
 const EMPTY_BLOCKS: A2uiBlock[] = [];
 
 // The recharts chart block is split into its own client-only chunk and next/dynamic-imported with
-// ssr:false (recharts is heavy and only renders below the fold, after a chat turn) — mirrors the
-// RouteMap → RouteMapLeaflet split.
+// ssr:false (recharts is heavy and only renders below the fold, after a chat turn).
 const ChartView = dynamic(() => import("./A2uiChartView"), { ssr: false });
 
 // Renders an LLM-authored A2UI surface (schemas.py:A2uiSurface) — the model composed this ordered

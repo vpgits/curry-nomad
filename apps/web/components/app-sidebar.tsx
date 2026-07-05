@@ -14,7 +14,6 @@ import {
   Package,
   ScrollText,
   SquarePen,
-  Truck,
 } from "lucide-react";
 import type { Thread } from "@langchain/langgraph-sdk";
 
@@ -59,7 +58,6 @@ const NAV_TOP: NavItem[] = [
 const NAV_OPS: NavItem[] = [
   { href: "/stock", label: "Stock", icon: Package, badge: "3" },
   { href: "/orders", label: "Orders", icon: ScrollText },
-  { href: "/routes", label: "Routes", icon: Truck },
 ];
 // Marketing has no dedicated page — it's the inline HITL flow on /ask (Ask Nora), so no nav group.
 

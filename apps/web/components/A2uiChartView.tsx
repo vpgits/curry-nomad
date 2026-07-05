@@ -20,8 +20,7 @@ import type { ChartPoint } from "@/lib/types";
 const CHART_COLORS = ["#d97706", "#0f766e", "#b45309", "#7c3aed", "#0369a1", "#be123c"];
 
 // One A2UI chart block (bar/line/pie). Default export so A2uiSurfaceView can next/dynamic-import it
-// with ssr:false — recharts is heavy and these cards only render below the fold, after a chat turn
-// (mirrors the RouteMap → RouteMapLeaflet split).
+// with ssr:false — recharts is heavy and these cards only render below the fold, after a chat turn.
 export default function A2uiChartView({
   title,
   kind,

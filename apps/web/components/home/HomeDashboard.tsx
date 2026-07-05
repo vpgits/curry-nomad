@@ -2,7 +2,7 @@
 
 import type { ComponentType, ReactNode } from "react";
 import Link from "next/link";
-import { AlertTriangle, Clock, Play } from "lucide-react";
+import { AlertTriangle, Play } from "lucide-react";
 
 import { KpiCard } from "@/components/ui/kpi-card";
 import { Eyebrow } from "@/components/ui/typography";
@@ -39,14 +39,6 @@ export function HomeDashboard() {
     title: `${s.lowStock} SKUs below reorder point`,
     sub: `≈ ${formatRupeesShort(s.restockEstimate)} to restock`,
     action: "Reorder →",
-  });
-  attention.push({
-    href: "/routes",
-    icon: Clock,
-    tone: "info",
-    title: `${s.deliveriesPending} deliveries ready to route`,
-    sub: "Colombo · Dehiwala · Moratuwa cluster",
-    action: "Plan →",
   });
 
   return (
@@ -149,28 +141,9 @@ export function HomeDashboard() {
             <div className="flex flex-wrap gap-2.5">
               <QuickChip href="/stock">Receive stock</QuickChip>
               <QuickChip href="/orders">New order</QuickChip>
-              <QuickChip href="/routes">Plan route</QuickChip>
               <QuickChip href="/ask" accent>
                 ✦ Make an ad
               </QuickChip>
-            </div>
-            <div className="mt-[15px] border-t pt-3.5">
-              <Eyebrow className="mb-2.5 text-[10px]">Today&apos;s run</Eyebrow>
-              <div className="flex items-center gap-3">
-                <div className="text-[22px] font-semibold tracking-[-0.01em]">
-                  41.2
-                  <span className="text-[13px] font-medium text-muted-foreground"> km</span>
-                </div>
-                <span className="rounded-full border border-success-edge bg-success-tint px-2 py-0.5 text-[11px] font-semibold text-success-text">
-                  30% shorter
-                </span>
-                <Link
-                  href="/routes"
-                  className="ml-auto rounded-[7px] bg-ink px-3.5 py-2 text-[12px] font-medium text-ink-foreground"
-                >
-                  Dispatch
-                </Link>
-              </div>
             </div>
           </div>
         </div>

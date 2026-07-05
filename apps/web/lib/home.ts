@@ -30,8 +30,7 @@ const FALLBACK: HomeSummary = {
 };
 
 // Composes the Home dashboard's aggregate from existing data sources (no new backend contract):
-// two cheap ops reads + the live thread list (for paused approvals). planRoute() is mutating, so it
-// is NOT called here — the "Today's run" figure stays a static preview until /routes.
+// two cheap ops reads + the live thread list (for paused approvals).
 export function useHomeSummary(): HomeSummary {
   const { threads } = useThreads();
   const [data, setData] = useState<HomeSummary | null>(null);
