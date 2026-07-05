@@ -13,9 +13,10 @@ One orchestrator routes each request to one of three core capabilities that deli
 
 - **Analytics — an AGENT.** Answers questions over a bundled SQLite database: writes SQL, runs
   it, and *self-corrects when a query fails*. Open-ended, so it's a hand-built tool loop.
-- **Marketing Studio — a WORKFLOW.** Generates a structured video-ad brief for a product via a
-  predictable pipeline with two human-review checkpoints (concept pick, then script). Predictable,
-  so it's a deterministic graph: chaining + parallel fan-out + an evaluator-optimizer loop.
+- **Marketing Studio — a WORKFLOW.** Generates an image **Instagram post** for a product via a
+  predictable pipeline with human-review checkpoints (concept pick, copy, then the generated
+  stills). Predictable, so it's a deterministic graph: chaining + parallel fan-out + an
+  evaluator-optimizer loop.
 - **Operations / Routing — DETERMINISTIC SERVICES.** Inventory, orders, and an NP-hard delivery-route
   optimizer, behind a REST API the agent merely *calls*. The "**limits of agentic development**"
   pillar — the rules live in code, not a prompt, so the agent can't oversell or invent a route.
@@ -30,9 +31,9 @@ Each capability surfaces its result as **native generative UI**: typed cards pus
 Leaflet `route_map`) and rendered by the web client via `LoadExternalComponent` — no CopilotKit.
 
 **Canonical demo:** *"What's our best-selling product in Colombo last quarter?"* → the analytics
-agent answers (self-correcting a bad query, with a dashboard card) → *"Make a 30s video ad for it"* →
-the marketing workflow runs, pauses for you to pick a concept and approve the script, then finishes —
-all on one thread.
+agent answers (self-correcting a bad query, with a dashboard card) → *"Make an Instagram post for it"* →
+the marketing workflow runs, pauses for you to pick a concept, approve the copy, and approve the
+generated stills, then finishes — all on one thread.
 
 ## Quickstart
 
@@ -90,7 +91,7 @@ cd apps/web && cp .env.example .env.local && pnpm install && pnpm dev    # http:
 
 The UI streams Nora's answers and renders the native **generative-UI cards** pushed from the graph
 via `LoadExternalComponent`: an analytics **dashboard**, the marketing **concept-pick** and
-**script-approval** gates plus the final storyboard / timeline / critique, and a Leaflet
+**copy-approval** gates plus the final storyboard / critique, and a Leaflet
 **route map**. Dedicated operations pages (`/stock`, `/orders`, `/routes`, `/inventory`) read the
 ops REST API, and an **Author UI** toggle on `/ask` shows the dynamic-schema "LLM authors the UI" mode. See
 [`apps/web/`](apps/web/) for details.
@@ -123,7 +124,7 @@ semantic Store even when the chat model is Anthropic — or point it at another 
 | **Prompt chaining + parallel fan-out (`Send`)** | `marketing/graph.py`, `marketing/nodes.py` | Marketing workflow (0:35–0:55) |
 | **Evaluator-optimizer loop** | `marketing` `critique` → `revise` | Marketing workflow |
 | **Request routing (orchestrator)** | `orchestrator.py` (`route` → analytics / marketing / routing / clarify) | Orchestrator + HITL (0:55–1:05) |
-| **Human-in-the-loop (`interrupt`)** | `marketing` `choose_concept` + `human_review` (two gates) | Orchestrator + HITL |
+| **Human-in-the-loop (`interrupt`)** | `marketing` `choose_concept` + `human_review` + `still_review` (three gates) | Orchestrator + HITL |
 | **Memory: checkpointer + semantic Store** | `memory.py`, read via `runtime.store` in both | Orchestrator + HITL |
 | **Limits of agentic dev — deterministic services** | `operations/services.py` (business rules), `operations/api.py` | Operations |
 | **NP-hard delivery routing (no LLM)** | `operations/routing.py` (nearest-neighbor + 2-opt) | Operations |
@@ -144,13 +145,14 @@ handler is annotated `(error: SqlError)`, so only SQL errors are caught — real
 loud. The production shortcut (`create_agent`) is shown in an appendix comment.
 
 **Marketing workflow (`marketing/graph.py`).** A deterministic subgraph:
-`fetch_product → load_brand → ideate∥ → choose_concept → write_script → human_review → storyboard
-→ shot_prompt_worker∥ → critique → (assemble→render | revise)`. Concept ideation runs in parallel
-within a node; per-shot prompts fan out with `Send` and gather via a reducer; `critique → revise`
-loops until it passes or hits `marketing_max_revisions`. **Two** HITL gates sit before the expensive
-creative steps — gate by risk: `choose_concept` (pick from the parallel ideas) and `human_review`
-(approve / edit / reject the script). Both are skipped in eval/test mode (`auto_choose` /
-`auto_approve`).
+`fetch_product → load_brand → ideate∥ → choose_concept → write_copy → human_review → storyboard
+→ shot_prompt_worker∥ → critique → (assemble → render_stills → still_review → finalize_post |
+revise)`. It produces an image **Instagram post** (hero + per-shot stills). Concept ideation runs in
+parallel within a node; per-shot prompts fan out with `Send` and gather via a reducer; `critique →
+revise` loops until it passes or hits `marketing_max_revisions`. **Three** HITL gates gate by risk:
+`choose_concept` (pick from the parallel ideas), `human_review` (approve / edit / reject the copy),
+and the visual `still_review` (approve / re-roll the generated stills before the post is finalized).
+All are skipped in eval/test mode (`auto_choose` / `auto_approve` / `auto_approve_stills`).
 
 **Operations & delivery routing (`operations/`).** The non-agentic counterpoint — the "limits of
 agentic development" made structural. A writable SQLite store, business-rule services
@@ -249,8 +251,8 @@ writable DB. A handful of `@pytest.mark.skipif` tests run live end-to-end when `
 ## Production swaps (the "you'd change one line" coda)
 
 - **Renderer:** `PlaceholderRenderer` (default, no external calls) ↔ the real `OpenRouterRenderer`
-  (`services/renderer.py` — generates a hero image + per-shot stills and submits image→video jobs;
-  the `marketing_render` card polls them) via `NORA_RENDERER=openrouter` + `OPENROUTER_API_KEY`.
+  (`services/renderer.py` — generates a hero image + per-shot stills via OpenRouter `/images`, shown
+  in the `marketing_render` card) via `NORA_RENDERER=openrouter` + `OPENROUTER_API_KEY`.
 - **Checkpointer:** `InMemorySaver` → `SqliteSaver` / `PostgresSaver` (`langgraph.checkpoint.*`).
 - **Store:** `InMemoryStore` → `PostgresStore` / `RedisStore`.
 - **Operations store:** `SqliteOperationsStore` → a `PostgresOperationsStore` implementing the same

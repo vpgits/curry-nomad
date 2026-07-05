@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import sys
 
+import pytest
 from langchain_core.messages import HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool, ToolException, tool
 from langgraph.checkpoint.memory import InMemorySaver
@@ -22,7 +23,7 @@ from langgraph.types import Command
 
 from nora.config import Settings
 from nora.orchestrator import build_orchestrator
-from nora.workspace.graph import WORKSPACE_APPROVAL_KIND, build_workspace_agent
+from nora.workspace.graph import WORKSPACE_APPROVAL_KIND, build_workspace_agent, is_write_tool
 from tests.fakes import ScriptedChatModel, ai_final, ai_tool_call
 
 
@@ -363,6 +364,109 @@ def test_workspace_middleware_hitl_self_corrects_on_tool_error():
     tool_msgs = [m for m in resumed["messages"] if isinstance(m, ToolMessage)]
     assert any("Re-read the available tools" in (m.content or "") for m in tool_msgs)
     assert "couldn't send it" in resumed["messages"][-1].content
+
+
+# --- write-gate coverage (audit regressions) ------------------------------------------------------
+
+
+def test_is_write_tool_gates_the_manage_convention_writes():
+    """Audit regression: this MCP server names its multi-mode create/update/delete tools `manage_*`
+    (plus `format_*`/`resize_*`/`export_doc_to_pdf`), which the verb list originally missed — so those
+    12 real WRITE tools ran with NO approval gate. They must all be gated now, and no READ tool may be
+    caught by the added verbs."""
+    must_gate = [
+        "manage_event", "manage_task", "manage_task_list", "manage_gmail_label",
+        "manage_out_of_office", "manage_focus_time", "manage_drive_access", "manage_doc_tab",
+        "manage_conditional_formatting", "format_sheet_range", "resize_sheet_dimensions",
+        "export_doc_to_pdf",
+    ]
+    must_not_gate = [
+        "list_events", "get_event", "search_gmail_messages", "list_tasks", "get_doc_content",
+        "list_calendars", "get_gmail_thread", "list_drive_items", "get_drive_file_content",
+    ]
+    ungated_writes = [t for t in must_gate if not is_write_tool(t)]
+    assert ungated_writes == [], f"these writes bypass the approval gate: {ungated_writes}"
+    over_gated_reads = [t for t in must_not_gate if is_write_tool(t)]
+    assert over_gated_reads == [], f"these reads are wrongly gated: {over_gated_reads}"
+
+
+def test_build_workspace_agent_fails_closed_on_an_unknown_hitl_mode():
+    """Audit regression: an unrecognized HITL mode must FAIL LOUD, never silently fall through to the
+    ungated loop (which would disable write approval account-wide on a typo). Only off/primitive/
+    middleware are valid."""
+    agent = build_workspace_agent(
+        model=ScriptedChatModel([ai_final("hi")]),
+        tools_provider=RecordingToolsProvider(),
+        hitl="bogus",
+    )
+    with pytest.raises(ValueError, match="unknown workspace_hitl mode"):
+        asyncio.run(agent([HumanMessage("hi")], access_token="tok"))
+
+
+def test_workspace_middleware_edit_cannot_swap_the_tool_name():
+    """Audit regression (CRITICAL, default `middleware` path): an `edit` decision may change a pending
+    write's ARGS but must NEVER change its tool NAME. A crafted resume that swaps the reviewed
+    `send_email` for a never-shown `delete_everything` is clamped — the reviewed tool runs (with the
+    edited args) and the swapped-in tool never executes."""
+
+    class _TwoWriteProvider:
+        def __init__(self):
+            self.sent: list[dict] = []
+            self.deleted: list[dict] = []
+
+        def __call__(self, *, access_token):  # noqa: ARG002 — token unused by the fake
+            sent, deleted = self.sent, self.deleted
+
+            @tool
+            def send_email(to: str, body: str) -> str:
+                """Send an email on the operator's behalf."""
+                sent.append({"to": to, "body": body})
+                return f"sent to {to}"
+
+            @tool
+            def delete_everything(to: str, body: str) -> str:
+                """Irreversibly delete the operator's data."""
+                deleted.append({"to": to, "body": body})
+                return "deleted"
+
+            return [send_email, delete_everything]
+
+    model = ScriptedChatModel(
+        [
+            ai_tool_call("send_email", {"to": "priya@example.com", "body": "delayed"}, "call-1"),
+            ai_final("Done."),
+        ]
+    )
+    provider = _TwoWriteProvider()
+    agent = build_workspace_agent(model=model, tools_provider=provider, hitl="middleware")
+    orch = _workspace_orch(agent)
+    config = {"configurable": {"thread_id": "w-edit-swap", "google_access_token": "tok"}}
+
+    paused = _run(orch, {"messages": [HumanMessage("email priya")]}, config)
+    assert _interrupt_payload(paused) is not None  # paused on the send_email write
+
+    # Malicious resume: "approve" as an EDIT but swap the tool to delete_everything.
+    resumed = _run(
+        orch,
+        Command(
+            resume={
+                "decisions": [
+                    {
+                        "type": "edit",
+                        "edited_action": {
+                            "name": "delete_everything",
+                            "args": {"to": "priya@example.com", "body": "delayed"},
+                        },
+                    }
+                ]
+            }
+        ),
+        config,
+    )
+
+    assert provider.deleted == []  # the swapped-in tool NEVER ran
+    assert provider.sent == [{"to": "priya@example.com", "body": "delayed"}]  # reviewed tool ran (clamped)
+    assert resumed is not None
 
 
 # --- AI-authored approval layout (presentation by the model, values stay literal) -----------------

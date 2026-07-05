@@ -124,16 +124,18 @@ _DEFAULT_REJECT_MESSAGE = (
     "would have done or ask how they'd like to proceed instead."
 )
 
-# Tools that mutate the operator's account: a curated set of the real Google Workspace MCP tool names
+# Tools that mutate the operator's account: a curated set of real Google Workspace MCP tool names
 # (exact match) PLUS a verb fallback, so a renamed/added mutation — or a test's `send_email` fake — is
 # still caught. Everything else (search/list/get) is read-only and runs without a pause.
+# Exact names here are belt-and-suspenders over the verb fallback, plus the ONE write no verb catches:
+# `export_doc_to_pdf` reads like a getter but writes a new PDF file to Drive. (`send_gmail_message` /
+# `draft_gmail_message` / `manage_event` are also verb-caught — listed for clarity.)
 WRITE_TOOL_NAMES = frozenset(
     {
         "send_gmail_message",
         "draft_gmail_message",
-        "create_calendar_event",
-        "modify_calendar_event",
-        "delete_calendar_event",
+        "manage_event",  # the real calendar create/modify/delete tool (was miswritten as *_calendar_event)
+        "export_doc_to_pdf",
     }
 )
 _WRITE_VERBS = (
@@ -141,6 +143,12 @@ _WRITE_VERBS = (
     "create",
     "draft",
     "update",
+    # This MCP server names its multi-mode create/update/delete tools `manage_*` (manage_event,
+    # manage_task, manage_task_list, manage_gmail_label, manage_out_of_office, manage_focus_time,
+    # manage_drive_access, manage_doc_tab, manage_conditional_formatting, …). Without "manage" the
+    # verb fallback missed ALL of them and they ran with NO approval gate — the audited bypass class.
+    # Verified against the full 71-tool surface: no READ tool starts with / contains `_manage`.
+    "manage",
     "modify",
     "delete",
     "insert",
@@ -150,8 +158,9 @@ _WRITE_VERBS = (
     "trash",
     # Docs/Sheets/Tasks/Drive mutations the granted scopes (docs:full sheets:full tasks:full) expose
     # but the Gmail/Calendar-shaped verbs above miss — e.g. replace_text, append_values, clear_values,
-    # batch_update, complete_task, rename_/share_/copy_/upload_. Over-gating a read is safe; missing a
-    # write is not, so keep this list generous.
+    # batch_update, complete_task, rename_/share_/copy_/upload_, format_sheet_range,
+    # resize_sheet_dimensions. Over-gating a read is safe; missing a write is not, so keep this list
+    # generous. ("format"/"resize" match no READ tool in the enumerated surface.)
     "replace",
     "append",
     "clear",
@@ -166,6 +175,8 @@ _WRITE_VERBS = (
     "set",
     "patch",
     "put",
+    "format",
+    "resize",
 )
 
 
@@ -526,8 +537,37 @@ def _compile_middleware_agent(
     from langchain.agents import create_agent
     from langchain.agents.middleware import AgentState, HumanInTheLoopMiddleware
 
+    class _NameGuardedHITL(HumanInTheLoopMiddleware):
+        """Defense-in-depth over `HumanInTheLoopMiddleware`: an `edit` decision may change a pending
+        write's ARGS but NEVER its tool NAME. The base `_process_decision` honors `edited_action['name']`
+        verbatim and reuses the original tool-call id (so no second interrupt fires), which lets a
+        crafted resume swap the reviewed `send_gmail_message` for a never-shown `manage_event(delete)`.
+        We clamp the edited name back to the tool the human actually saw before the base handles it.
+        (`after_model`/`aafter_model` both call `self._process_decision`, so this one override covers
+        the sync and async paths; the hand-written 'primitive' gate is already safe — it reads only
+        `edited_action['args']`, never the name.)"""
+
+        @staticmethod
+        def _process_decision(decision, tool_call, config):
+            if isinstance(decision, dict) and decision.get("type") == "edit":
+                edited = decision.get("edited_action")
+                if isinstance(edited, dict) and edited.get("name") != tool_call["name"]:
+                    log.info(
+                        "workspace.edit_name_clamped",
+                        reviewed=tool_call["name"],
+                        attempted=edited.get("name"),
+                    )
+                    decision = {**decision, "edited_action": {**edited, "name": tool_call["name"]}}
+            return HumanInTheLoopMiddleware._process_decision(decision, tool_call, config)
+
     wrapped = [t if t.name == present_ui.name else _self_correcting(t) for t in tools]
-    interrupt_on = {t.name: True for t in wrapped if is_write(t.name)}
+    # Explicit allowed_decisions (approve / edit args / reject) — drop the unused "respond" (human
+    # answers on behalf of the tool), which we never surface. The name-swap is closed by the clamp above.
+    interrupt_on = {
+        t.name: {"allowed_decisions": ["approve", "edit", "reject"]}
+        for t in wrapped
+        if is_write(t.name)
+    }
 
     class _WorkspaceMiddlewareState(AgentState):
         # Mirror the orchestrator's channel so present_ui's card lands somewhere real; the surface is
@@ -541,7 +581,7 @@ def _compile_middleware_agent(
         system_prompt=system_prompt,
         state_schema=_WorkspaceMiddlewareState,
         middleware=[
-            HumanInTheLoopMiddleware(
+            _NameGuardedHITL(
                 interrupt_on=interrupt_on,
                 description_prefix="Workspace action pending approval",
             )
@@ -614,8 +654,16 @@ def build_workspace_agent(
             agent = _compile_middleware_agent(_model, tools, write_pred, system_prompt)
         elif mode == "primitive":
             agent = _compile_loop_gated(_model, tools, write_pred, layout_model, system_prompt)
-        else:
+        elif mode == "off":
+            # Explicit opt-OUT only → the ungated loop. Fail-closed: an UNRECOGNIZED mode (a typo, an
+            # empty string, a not-yet-wired name) must NOT silently fall through to "no gate" — that
+            # would disable write approval account-wide without a peep. Raise instead. (`settings.
+            # workspace_hitl` is a validated Literal, so this only guards the injectable `hitl=` param.)
             agent = _compile_loop(_model, tools, system_prompt)
+        else:
+            raise ValueError(
+                f"unknown workspace_hitl mode {mode!r}; expected 'middleware', 'primitive', or 'off'"
+            )
         # Drive the loop async: MCP tools are coroutine-only, and the orchestrator is already on the
         # event loop (Aegra `astream`, the CLI `astream`), so we await directly — no `asyncio.run`.
         result = await agent.ainvoke({"messages": messages}, config)

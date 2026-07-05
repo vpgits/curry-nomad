@@ -6,19 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A LangGraph / LangChain **1.x** teaching artifact. "Nora" is the operations assistant for a
 fictional Sri Lankan spice business. One **orchestrator** routes each request to one of three core
-capabilities that deliberately contrast (plus an optional, OFF-by-default fourth, `workspace`):
+capabilities that deliberately contrast (plus a first-party, ON-by-default fourth, `workspace`):
 
 - **Analytics — an AGENT** (`analytics/`): a hand-written tool loop that writes SQL over a
   bundled SQLite DB and *self-corrects when a query fails*.
 - **Marketing Studio — a WORKFLOW** (`marketing/`): a deterministic graph (chaining + parallel
-  fan-out + evaluator-optimizer loop) that produces a video-ad brief, with two human-review
-  checkpoints (concept pick, then script).
+  fan-out + evaluator-optimizer loop) that produces an image **Instagram post** (hero + per-shot
+  stills), with human-review checkpoints (concept pick, copy, then the generated stills).
 - **Operations / Routing — DETERMINISTIC SERVICES** (`operations/`): a non-agentic backend
   (writable store, business-rule services, an NP-hard delivery-route optimizer) that the
   `routing` capability merely *calls*. This is the deliberate "**limits of agentic development**"
   pillar — the rules live in code, not a prompt, so the agent literally cannot oversell or invent
   a route.
-- **Workspace — an AGENT over EXTERNAL tools via MCP** (`workspace/`, *optional, OFF by default*):
+- **Workspace — an AGENT over EXTERNAL tools via MCP** (`workspace/`, *first-party, ON by default*):
   a tool loop (like analytics) that acts on the **logged-in operator's own Google account**
   (Gmail/Calendar) through the self-hosted Google Workspace **MCP** server. The contrast with
   analytics: an agent over a *real external system reached via MCP* and gated by **OAuth**, not an
@@ -41,14 +41,14 @@ Monorepo with two sibling apps under `apps/`:
 - `apps/nora/` — the Python backend (package `nora` under `apps/nora/src/nora/`, plus `tests/`,
   `evals/`, `scripts/`). Subpackages: `analytics/` (the agent), `marketing/` (the workflow),
   `operations/` (the deterministic ops backend + REST API), `workspace/` (the optional Google
-  Workspace MCP agent), `services/` (ports & adapters), plus `orchestrator.py` (the supervisor that
-  delegates to the capabilities) and `auth.py` (the optional Aegra custom-auth handler for
-  per-operator identity).
+  Workspace MCP agent), `services/` (ports & adapters), plus `orchestrator.py` (router),
+  `auth.py` (the optional Aegra custom-auth handler for per-operator identity), and `a2ui_studio.py`
+  (a second graph: the dynamic-schema gen-UI showcase).
 - `apps/web/` — the Next.js frontend (Agent Protocol client; renders the native gen-UI cards).
 
 It's a **single root Python package**: `pyproject.toml`, `uv.lock`, and the `aegra.json`
-graph config live at the **repo root** — run every command from there. `aegra.json` registers the
-**`nora`** graph (the orchestrator/supervisor). Unless a
+graph config live at the **repo root** — run every command from there. `aegra.json` registers
+**two graphs**: `nora` (the orchestrator) and `nora_a2ui` (the studio). Unless a
 path is given from the repo root, file references below are relative to the `nora` package
 (`apps/nora/src/nora/`).
 
@@ -62,7 +62,7 @@ uv run python -m nora.data.seed                  # rebuild the bundled read-only
 uv run python -m nora.operations.seed            # (re)build the WRITABLE operations DB (data/runtime/operations.db; needs --extra operations)
 uv run python -m nora.app "What was our best-selling product in Colombo last quarter?"   # run one turn (needs provider key)
 uv run python apps/nora/evals/run_evals.py --suite all   # eval suites: analytics | marketing | all (needs provider key)
-uv run --extra aegra aegra dev                    # serve the `nora` graph over the Agent Protocol (Aegra; starts Postgres via Docker)
+uv run --extra aegra aegra dev                    # serve the `nora` + `nora_a2ui` graphs over the Agent Protocol (Aegra; starts Postgres via Docker)
 uv run --extra operations nora-ops-api            # serve the operations REST API on :8000 (no LLM, no API key)
 
 uv run pytest                                    # full offline test suite (NO API key needed)
@@ -104,7 +104,7 @@ OpenAI-verified org.)
 
 ### Web stack (optional)
 ```bash
-uv run --extra aegra aegra dev                    # serve the `nora` graph over the Agent Protocol on :2026 (Postgres via Docker; needs OPENAI_API_KEY)
+uv run --extra aegra aegra dev                    # serve `nora`/`nora_a2ui` over the Agent Protocol on :2026 (Postgres via Docker; needs OPENAI_API_KEY)
 uv run --extra operations nora-ops-api            # serve the ops REST API on :8000 (the `routing` capability + /stock /orders /routes call it)
 uv run python apps/nora/scripts/seed_store.py    # seed brand voice + metric definitions into the running Store
 cd apps/web && pnpm install && pnpm dev          # Next.js UI on :3000
@@ -112,9 +112,9 @@ cd apps/web && pnpm install && pnpm dev          # Next.js UI on :3000
 Unlike `langgraph dev`, Aegra does not enforce a blocking-call check, so Nora's synchronous
 `.invoke()` subgraph calls (and synchronous SQLite) need no special flag. Aegra is Postgres-backed,
 so threads/Store persist across restarts. The web app's routes: `/` (home), `/ask` (chat with
-inline gen-UI), `/stock` `/orders` `/routes` `/inventory` (operations, fed by the ops API),
-`/briefs` (marketing HITL). The A2UI "model authors the UI" showcase is now an **Author UI**
-output-mode toggle on `/ask` (no separate `/studio` route). Routing
+inline gen-UI + the marketing HITL gates — concept pick, copy review, still review — all resumed
+in-conversation), `/stock` `/orders` `/routes` `/inventory` (operations, fed by the ops API), and
+`/studio` (the `nora_a2ui` dynamic-schema gen-UI showcase). Routing
 asks and the operations pages need the **ops API running** (its absence degrades to a text reply,
 never a crash).
 
@@ -136,8 +136,8 @@ injectable for offline tests) and pushes a `route_map` card.
 - `build_orchestrator(...)` / `build_*_graph(...)`: explicit constructors with **injectable**
   `model`, `checkpointer`, `store` (and `spice_db`, `auto_approve`, `auto_choose`, `route_planner`,
   `dashboard_model`). This is how tests and the CLI wire things.
-- `make_graph()` (referenced by `aegra.json` as `nora`):
-  compiles **without** a checkpointer/store because the *platform* (Aegra) injects persistence
+- `make_graph()` / `make_a2ui_graph()` (referenced by `aegra.json` as `nora` / `nora_a2ui`):
+  compile **without** a checkpointer/store because the *platform* (Aegra) injects persistence
   (Postgres checkpointer) + the semantic Store at runtime. The CLI (`app.py`) is the self-contained
   path and builds its own in-memory ones.
 
@@ -153,17 +153,23 @@ regenerating on each revision. TypedDict is deliberate (required by the prebuilt
 clean for partial-update semantics) — don't convert state to Pydantic.
 
 **Marketing pipeline shape (`marketing/graph.py`).** `fetch_product → load_brand → ideate(∥) →
-choose_concept → write_script → human_review → storyboard → [Send fan-out] shot_prompt_worker(∥)
-→ critique → (assemble→render→END | revise→storyboard)`. There are **two** HITL gates, both before
-the expensive creative steps (gate by risk): `choose_concept` (the concept-pick gate) and
-`human_review` (script review). `critique → revise` loops until pass or `marketing_max_revisions`.
+choose_concept → write_copy → human_review → storyboard → [Send fan-out] shot_prompt_worker(∥)
+→ critique → (assemble → render_stills → still_review → finalize_post → END | revise→storyboard)`.
+The workflow produces an **image-only Instagram post** (a hero image + a still per shot). There are
+**three** HITL gates (gate by risk): `choose_concept` (concept pick), `human_review` (copy review),
+and the visual `still_review` (approve/re-roll the generated stills before the post is finalized;
+`regenerate_stills` re-rolls only the flagged shots, then loops back). `critique → revise` loops
+until pass or `marketing_max_revisions`.
 Two knobs control the gates, both defaulting to *skip* so unattended evals/tests keep their single
-script gate: `auto_choose=True` auto-picks the first concept (the orchestrator passes
+copy gate: `auto_choose=True` auto-picks the first concept (the orchestrator passes
 `auto_choose=False` to add the interactive `interrupt()` whose payload carries
 `kind: "concept_pick"`); `auto_approve=True` passes `human_review` through (its `interrupt` payload
-carries `kind: "script_review"`, and it returns `Command[Literal["storyboard","cancel"]]`). The
-finished workflow's artifacts are pushed as gen-UI cards (`video_brief`, `marketing_storyboard`,
-`marketing_script_timeline`, `marketing_critique`).
+carries `kind: "copy_review"`, and it returns `Command[Literal["storyboard","cancel"]]`).
+`auto_approve_stills=True` likewise skips the visual `still_review` gate (`kind: "still_review"`,
+returns `Command[Literal["regenerate_stills","finalize_post"]]`); the orchestrator enables the gate
+only when the openrouter renderer is active. The finished workflow's artifacts are pushed as gen-UI
+cards (`post_brief`, `marketing_storyboard`, `marketing_critique`,
+`marketing_render`).
 
 **Operations subsystem (`operations/`).** A deliberately **non-agentic** Phase-1 backend — the
 "limits of agentic development" pillar. Layered: `schema.py` (DDL for a *writable* SQLite DB, kept
@@ -181,12 +187,14 @@ plants a few low-stock SKUs and a zig-zag delivery set so the demos have signal)
 it's **ports & adapters**: `operations/interfaces.py:OperationsStore` is a Protocol, so a Postgres
 adapter is wiring-only.
 
-**Workspace capability (`workspace/`, optional — OFF by default).** An agent that acts on the
+**Workspace capability (`workspace/`, first-party — ON by default).** An agent that acts on the
 **logged-in operator's own Google account** (Gmail/Calendar) via the self-hosted Google Workspace
 **MCP** server — the contrast with the in-process analytics agent (a tool loop over a *real external
 system reached through MCP*, gated by OAuth) and with deterministic `routing`. Gated by
-`settings.workspace_enabled` so the **base install never imports `langchain-mcp-adapters`** and the
-offline suite stays green; the orchestrator wires a stub "connect" node when off. It's an **imperative
+`settings.workspace_enabled` (default `True`; turn off with `NORA_WORKSPACE_ENABLED=false`, which the
+offline suite pins). `langchain-mcp-adapters` is a base dependency but **imported lazily** — only when
+the real tools provider is built — so the offline suite (which injects a fake provider) never mints an
+MCP client and stays green; the orchestrator wires a stub "connect" node when off. It's an **imperative
 orchestrator node** (like `marketing`, not a compiled subgraph node like `analytics`) because the
 tool set is **per-run, token-dependent**: `build_workspace_agent(...)`'s injectable `tools_provider`
 (the analogue of routing's `route_planner`) mints a **fresh `MultiServerMCPClient` per run** with the
@@ -220,33 +228,30 @@ token storage is just a session-scoped encrypted cookie). Run it with `uv sync -
 by calling `push_ui_message("<name>", payload, message=...)`; the web client renders them via
 `LoadExternalComponent` (no CopilotKit). Cards: `analytics_dashboard` (composed post-hoc by a
 `dashboard_model` from the agent's answer + the SQL it ran — see `_build_dashboard`), the marketing
-set (`video_brief` / `marketing_storyboard` / `marketing_script_timeline` / `marketing_critique` /
+set (`post_brief` / `marketing_storyboard` / `marketing_critique` /
 `marketing_render`), and `route_map` (rendered as a Leaflet map). **Gen-UI is always best-effort** — it's wrapped so a
 failure (or no provider key offline) skips the card and never blocks the text answer. Internal
 `with_structured_output` calls that build cards (router, dashboard, marketing) use
 `disable_streaming=True` so their tool-call deltas don't surface as phantom partial messages on
 Aegra's `messages` stream; only the analytics agent streams (its tokens *are* the answer).
 
-**Marketing rendering — real media via OpenRouter (`services/renderer.py`, `services/openrouter.py`).**
+**Marketing rendering — real images via OpenRouter (`services/renderer.py`, `services/openrouter.py`).**
 Placeholder by default (`NORA_RENDERER=placeholder`, no spend, no key); `NORA_RENDERER=openrouter`
 swaps in the real adapter behind the `Renderer` port (the ports-&-adapters payoff). It generates a
-hero image + a still per shot **synchronously** via OpenRouter `/images`, then submits one
-**image→video** job per shot via `/videos` and returns the job ids in `render_result` — the render
-node never blocks on the slow video; the `marketing_render` card polls each job from the UI. Stills
-are written to `settings.media_dir` and served by the **ops-api at `/media`** (keyless static files,
-on a dir/volume shared with the renderer); video status + content are proxied by Next.js
-`app/api/render/video/[jobId]` so the OpenRouter key stays server-side. **Image→video needs a public
-first-frame URL** OpenRouter can fetch (`NORA_MEDIA_PUBLIC_BASE_URL`) — `localhost`/base64 won't do;
-without it the renderer falls back to text→video (recorded in `render_result.mode`). The OpenRouter
-HTTP client is **injectable**, so the renderer's tests run fully offline against a fake.
+hero image + a still per shot **synchronously** via OpenRouter `/images` — together the **Instagram
+post** — writes them to `settings.media_dir`, and returns them in `render_result` for the
+`marketing_render` card. Rendering is staged (`render_stills → still_review → finalize_post`) so the
+operator can approve or re-roll the generated stills at the visual HITL gate before the post is
+finalized. Stills are served by the **ops-api at `/media`** (keyless static files, on a dir/volume
+shared with the renderer). The OpenRouter HTTP client is **injectable**, so the renderer's tests run
+fully offline against a fake. (Video generation was deprecated — it dominated cost; the deliverable
+is now an image post.)
 
-**A2UI authored-UI mode — the dynamic-schema contrast (`orchestrator.py`, `_author_surface`).** Where
-the analytics path normally attaches a *fixed* dashboard shape, an **output mode** lets a "UI-author"
-model **compose** the surface from an ordered list of catalog blocks (`A2uiSurface` / `A2uiBlock` in
-`schemas.py`) — the "LLM authors the UI" pattern. It's selected per-run by
-`config.configurable.ui_mode == "authored"` (the web client's **Author UI** toggle on `/ask`); the
-`analytics_dashboard` node then pushes an `a2ui_surface` card instead of `analytics_dashboard`. (This
-was the separate `nora_a2ui` / `/studio` graph — folded into the analytics path now.) Note `A2uiBlock` is deliberately **one flat model with optional per-type fields, not a
+**A2UI studio — the dynamic-schema contrast (`a2ui_studio.py`, graph `nora_a2ui`).** Where the
+analytics path attaches a *fixed* dashboard shape, this graph (`analytics → ui_author`) lets a
+"UI-author" model **compose** the surface from an ordered list of catalog blocks (`A2uiSurface` /
+`A2uiBlock` in `schemas.py`) — the "LLM authors the UI" pattern, rendered by the `/studio` web
+surface. Note `A2uiBlock` is deliberately **one flat model with optional per-type fields, not a
 discriminated union** — OpenAI strict structured-output rejects `anyOf`/`oneOf`, so a union would
 make the authoring call throw. Same lesson constrains `AnalyticsDashboard`.
 

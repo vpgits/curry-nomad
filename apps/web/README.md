@@ -16,12 +16,13 @@ Next.js (useStream) ──Agent Protocol──▶ Aegra ──▶ nora orchestra
 - A chat box that streams Nora's answers.
 - The analytics **agent**'s replies (and any tool calls it surfaces).
 - The marketing **workflow**'s human-review gate as an **approval card** — approve, edit the
-  script in place, or reject — which resumes the paused run.
-- The final **VideoBrief** rendered as a card (concept, hook, script, shots, CTA, hashtags,
-  and the real product facts it was grounded in).
+  post copy in place, or reject — which resumes the paused run.
+- The final creative **brief** rendered as a card (concept, hook, caption, images, CTA, hashtags,
+  and the real product facts it was grounded in), plus the generated **Instagram post** (hero +
+  per-shot stills) in the `marketing_render` card.
 
 The canonical demo runs on one thread: *"best-selling product in Colombo?"* → answer →
-*"make a video ad for it"* → approval card → brief.
+*"make an Instagram post for it"* → approval cards → the finished post.
 
 ## Run
 

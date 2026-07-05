@@ -273,8 +273,16 @@ function MessageList({
                   <StillReview interrupt={interrupt} />
                 ) : interrupt.kind === "concept_pick" ? (
                   <ConceptPicker interrupt={interrupt} />
-                ) : (
+                ) : interrupt.kind === "copy_review" || interrupt.caption != null ? (
                   <CopyReview key={interrupt.caption} interrupt={interrupt} />
+                ) : (
+                  // Fail SAFE on an unrecognized approval shape: render an inert notice rather than
+                  // defaulting to a copy-review card (which could present the wrong action to approve).
+                  // No resume control here, so nothing can be accidentally approved.
+                  <div className="rounded-lg border border-danger-edge bg-danger-tint/30 px-3.5 py-2.5 text-[13px] text-danger-text">
+                    This approval request wasn&apos;t recognized, so Nora won&apos;t proceed
+                    automatically. Reload the page and try again.
+                  </div>
                 )}
               </CardErrorBoundary>
             )}
