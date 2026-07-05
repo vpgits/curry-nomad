@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, use, type ReactNode } from "react";
+import { createContext, use, useRef, type ReactNode } from "react";
 import { useStream } from "@langchain/langgraph-sdk/react";
 import {
   uiMessageReducer,
@@ -75,8 +75,99 @@ export function StreamProvider({ children }: { children: ReactNode }) {
     },
   });
 
-  return <StreamContext.Provider value={stream}>{children}</StreamContext.Provider>;
+  // Guard against the marketing subgraph transiently blanking the thread mid-stream (see below).
+  const guardedStream = useSubgraphBlankGuard(stream);
+
+  return <StreamContext.Provider value={guardedStream}>{children}</StreamContext.Provider>;
 }
+
+// Count human turns in a message list — the stable anchor the blank-guard keys on (see below).
+function countHumans(messages: StreamContextType["messages"] | undefined): number {
+  if (!messages) return 0;
+  let n = 0;
+  for (const m of messages) if (m.type === "human") n += 1;
+  return n;
+}
+
+// ── Blank-guard for imperative-subgraph streaming ──────────────────────────────────────────────
+// The marketing capability is an imperative subgraph whose state is DISJOINT from the chat — it has
+// no `messages` channel (see MarketingState). We submit with `streamSubgraphs: true` because the
+// analytics AGENT is a real subgraph node and its tokens must stream in live. The side effect: the
+// marketing WORKFLOW's namespaced `values|marketing:…` snapshots also reach the client, and the
+// langgraph-sdk stream path applies each one as the WHOLE thread state. Those frames carry no
+// `messages` and no `ui`, so mid-run the conversation and its gen-UI cards blank out until the next
+// root snapshot restores them — the reported "/ask goes blank while marketing runs".
+//
+// Root snapshots only ever GROW the human turns (add_messages is append-only), so a mid-run snapshot
+// with FEWER human turns than this run started with is a foreign subgraph frame, not real root state
+// — hold the last authoritative snapshot until root state returns. Analytics never trips this: it is
+// a real subgraph node that SHARES the `messages` channel, so its frames keep every human turn.
+// Refs (not state) are load-bearing here: this is the canonical "remember the last snapshot across
+// renders WITHOUT re-rendering" pattern — the SDK's own useStream writes refs in render the same way.
+// Holding this in state would fire an extra render per streamed token. The rule doesn't model this
+// last-value-memory pattern, so it's disabled for the whole (small, self-contained) hook.
+/* eslint-disable react-hooks/refs -- last-value memory, intentionally read/written in render */
+function useSubgraphBlankGuard(stream: StreamContextType): StreamContextType {
+  const heldMessages = useRef(stream.messages);
+  const heldValues = useRef(stream.values);
+  const baselineHumans = useRef(0);
+  const wasLoading = useRef(false);
+  // The latest SDK stream, plus ONE stable proxy that reads it. Identity stability is load-bearing:
+  // returning a fresh `new Proxy` every render made LoadExternalComponent's `stream` prop change each
+  // render, so its subscription to the SDK's UI StreamManager (a useSyncExternalStore) re-subscribed
+  // every render → notifyListeners → forceStoreRerender → re-render → re-subscribe → ... = "Maximum
+  // update depth exceeded". It only surfaced once the workspace subgraph started streaming and
+  // tripping the clobber path. A memoized proxy reading refs keeps a CONSTANT identity while still
+  // reflecting live values.
+  const latestStream = useRef(stream);
+  latestStream.current = stream;
+  const blankProxy = useRef<StreamContextType | null>(null);
+
+  const humans = countHumans(stream.messages);
+  // A run just started or just settled → this snapshot is authoritative; re-baseline the human
+  // count (also covers edit/branch-switch, which can legitimately land on a shorter history).
+  if (stream.isLoading !== wasLoading.current) baselineHumans.current = humans;
+  wasLoading.current = stream.isLoading;
+
+  const clobbered = stream.isLoading && humans < baselineHumans.current;
+  if (!clobbered) {
+    baselineHumans.current = Math.max(baselineHumans.current, humans);
+    heldMessages.current = stream.messages;
+    heldValues.current = stream.values;
+    return stream; // steady state: pass the SDK object straight through, untouched.
+  }
+
+  // Clobber: shim `messages`/`values` back to the last good snapshot via a SINGLE memoized proxy
+  // whose identity stays constant across the clobber's many render frames (see note above). The traps
+  // read refs (latest stream + frozen snapshots), so a fixed proxy object still reflects live values;
+  // `s` as receiver keeps the SDK's closure-based getters intact, and the ownKeys/descriptor traps
+  // forward so spreads/inspection still see the real shape.
+  if (blankProxy.current === null) {
+    blankProxy.current = new Proxy({} as StreamContextType, {
+      get(_t, prop) {
+        if (prop === "messages") return heldMessages.current;
+        if (prop === "values") return heldValues.current;
+        const s = latestStream.current as object;
+        return Reflect.get(s, prop, s);
+      },
+      has(_t, prop) {
+        return prop in (latestStream.current as object);
+      },
+      ownKeys() {
+        return Reflect.ownKeys(latestStream.current as object);
+      },
+      getOwnPropertyDescriptor(_t, prop) {
+        const d = Reflect.getOwnPropertyDescriptor(latestStream.current as object, prop);
+        // Proxy invariant: a descriptor reported for a key absent on the (empty) target must be
+        // configurable, else the trap throws.
+        if (d) d.configurable = true;
+        return d;
+      },
+    });
+  }
+  return blankProxy.current;
+}
+/* eslint-enable react-hooks/refs */
 
 export function useStreamContext(): StreamContextType {
   const ctx = use(StreamContext);

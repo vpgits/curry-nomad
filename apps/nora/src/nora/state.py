@@ -66,10 +66,19 @@ class AnalyticsState(TypedDict):
     no manual seeding). The llm node reads it to stop gracefully with a plain answer when the budget
     is nearly spent, rather than looping into a `GraphRecursionError` — which, since analytics runs as
     a subgraph node, would otherwise crash the whole turn. (The workspace agent reuses this state, so
-    it gets the same guard.)"""
+    it gets the same guard.)
+
+    `ui` mirrors the orchestrator's channel (same name + `ui_message_reducer`): the analytics agent's
+    `present_ui` tool (ui_tools.py) pushes an `A2uiSurface` card from INSIDE this subgraph, and a card
+    written to an undeclared channel is silently dropped. Because analytics runs as a real subgraph
+    node, sharing the channel name makes LangGraph propagate those cards up into the orchestrator's
+    `ui` channel exactly like `messages` — so an agent-authored card renders inline in the top-level
+    thread. (The workspace loops reuse this state too, so they carry the channel; their imperative node
+    re-emits instead — see ui_tools.emit_present_ui_from_messages.)"""
 
     messages: Annotated[list, add_messages]
     remaining_steps: RemainingSteps
+    ui: Annotated[Sequence[AnyUIMessage], ui_message_reducer]
 
 
 class MarketingState(TypedDict):
@@ -83,12 +92,24 @@ class MarketingState(TypedDict):
     brand_voice: str
     concepts: Annotated[list[dict], operator.add]  # ConceptIdea dicts; parallel ideate (gather)
     chosen_concept: NotRequired[dict]  # ConceptIdea
-    script_beats: NotRequired[list[dict]]  # ScriptBeat
+    # Operator-controlled post size + caption verbosity (set at the copy-review gate, seeded from
+    # settings when absent). `num_images` unifies the on-screen-text lines, storyboard shots, and
+    # rendered stills so the count is always consistent.
+    num_images: NotRequired[int]
+    verbosity: NotRequired[str]  # concise | standard | detailed
+    post_copy: NotRequired[dict]  # {"caption": str, "on_screen_texts": list[str]}
     approved: NotRequired[bool]
     shots: NotRequired[list[dict]]  # Shot
     # Send fan-in (gather), but resettable so revisions don't accumulate stale prompts.
     shot_prompts: Annotated[list[dict], reset_or_extend]  # ShotPrompt
     critique: NotRequired[dict]  # Critique
     revision_count: NotRequired[int]  # seeded by initial_marketing_state; nodes read it defensively
-    brief: NotRequired[dict]  # VideoBrief
+    brief: NotRequired[dict]  # PostBrief
+    # Staged render: `render_stills` holds the generated stills while the operator reviews them at
+    # the still-review HITL gate; `still_regen` carries the operator's re-roll request into the
+    # regenerate node; `still_revision_count` bounds the loop; `render_result` is the finalized
+    # Instagram post the marketing_render card renders.
+    render_stills: NotRequired[dict]  # RenderResult (status="stills_ready") awaiting review
+    still_regen: NotRequired[dict]  # {"indices": [...], "overrides": {index: prompt}}
+    still_revision_count: NotRequired[int]
     render_result: NotRequired[dict]

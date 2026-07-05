@@ -1,14 +1,14 @@
 """Marketing workflow prompts (versioned, in one place).
 
 Each builder returns a plain string. Product facts are passed in as a dict (pulled from the
-real DB row) so the copy is grounded — the eval checks those facts actually appear in the brief.
+real DB row) so the copy is grounded — the eval checks those facts actually appear in the post.
 """
 
 from __future__ import annotations
 
-from nora.schemas import ConceptIdea, ScriptBeat, Shot, ShotPrompt
+from nora.schemas import ConceptIdea, Shot, ShotPrompt
 
-MARKETING_PROMPT_VERSION = "v1"
+MARKETING_PROMPT_VERSION = "v2"
 
 # Fallback brand voice when the Store isn't wired (M2 runs before memory in M3).
 DEFAULT_BRAND_VOICE = (
@@ -19,18 +19,25 @@ DEFAULT_BRAND_VOICE = (
 # Distinct creative angles so parallel ideation returns genuinely different concepts.
 _ANGLE_SEEDS = [
     "origin story — the specific place and the people who grow it",
-    "sensory — aroma, color, and the sound of cooking",
+    "sensory — aroma, color, and the textures of cooking",
     "everyday ritual — the dish this unlocks at home",
     "heritage & pride — diaspora nostalgia, done tastefully",
     "bold contrast — supermarket blend vs. the real single-origin thing",
 ]
 
 PLATFORM_RULES = (
-    "Platform rules for a ~30s Instagram Reel: the hook must land in the first 3 seconds "
-    "(first beat starts at 0s and ends by 3s); there must be a clear call-to-action; total "
-    "duration should be 25-35s; the product's real facts (name, origin) must be used; no "
-    "banned claims (no 'cure', 'guaranteed', '#1 in the world', or medical claims)."
+    "Platform rules for an Instagram image post: a scroll-stopping hook in the caption's first "
+    "line; a clear call-to-action; the product's real facts (name, origin) must be used; each "
+    "image has a short on-screen text line; no banned claims (no 'cure', 'guaranteed', "
+    "'#1 in the world', or medical claims)."
 )
+
+# Caption length by operator-chosen verbosity (the copy-gate control).
+_VERBOSITY = {
+    "concise": "Keep the caption very short — 1-2 punchy lines.",
+    "standard": "Keep the caption around 3 sentences.",
+    "detailed": "Write a richer, storytelling caption of 4-6 sentences.",
+}
 
 
 def _facts_block(facts: dict) -> str:
@@ -46,63 +53,78 @@ def ideate_prompt(brand_voice: str, facts: dict, request: str, seed_index: int) 
     return (
         f"You are a creative director for Curry Nomad.\nBrand voice: {brand_voice}\n"
         f"{_facts_block(facts)}\nRequest: {request}\n\n"
-        f"Propose ONE distinct short-video concept built around this angle: {angle}.\n"
+        f"Propose ONE distinct Instagram post concept built around this angle: {angle}.\n"
         "Return an angle (one line), a scroll-stopping hook line, and a one-sentence rationale."
     )
 
 
-def script_prompt(concept: ConceptIdea, brand_voice: str, facts: dict, target_s: float) -> str:
+def copy_prompt(
+    concept: ConceptIdea,
+    brand_voice: str,
+    facts: dict,
+    *,
+    verbosity: str = "standard",
+    num_images: int = 4,
+) -> str:
+    length = _VERBOSITY.get(verbosity, _VERBOSITY["standard"])
     return (
         f"Brand voice: {brand_voice}\n{_facts_block(facts)}\n\n"
         f"Chosen concept — angle: {concept.angle}; hook: {concept.hook}\n\n"
-        f"Write a ~{target_s:.0f}s Instagram Reel voiceover script as timed beats. The first "
-        "beat MUST start at 0s and deliver the hook within the first 3 seconds. Cover the "
-        "product's real origin. End with a clear call-to-action beat. Keep total duration "
-        "between 25 and 35 seconds. Each beat has t_start_s, t_end_s, voiceover, and optional "
-        "on_screen_text. No banned claims (no cure/guaranteed/#1/medical claims)."
+        "Write the copy for an Instagram image post:\n"
+        "- caption: the post caption body. Open with the hook on the first line, then the "
+        f"product's real origin story, and end with a clear call-to-action. {length}\n"
+        f"- on_screen_texts: EXACTLY {num_images} short on-screen text lines (a few words each), "
+        "one per intended image, in order — the first carries the hook.\n"
+        "No banned claims (no cure/guaranteed/#1/medical claims)."
     )
 
 
-def storyboard_prompt(script_beats: list[ScriptBeat], facts: dict) -> str:
-    beats = "\n".join(f"[{b.t_start_s}-{b.t_end_s}s] {b.voiceover}" for b in script_beats)
+def storyboard_prompt(caption: str, on_screen_texts: list[str], facts: dict) -> str:
+    lines = "\n".join(f"{i}: {t}" for i, t in enumerate(on_screen_texts))
+    n = len(on_screen_texts)
     return (
-        f"{_facts_block(facts)}\n\nScript:\n{beats}\n\n"
-        "Break this script into 3-6 visual shots that cover the whole duration. For each shot "
-        "give an index (starting at 0), a concrete scene_description, and a duration_s. The "
-        "shot durations should roughly sum to the script length."
+        f"{_facts_block(facts)}\n\nPost caption:\n{caption}\n\nOn-screen text lines:\n{lines}\n\n"
+        f"Produce EXACTLY {n} still images, one per on-screen text line above. For each, give "
+        "an index (starting at 0, matching the line), a concrete scene_description of the image, "
+        "and the matching on_screen_text."
     )
 
 
 def shot_prompt_prompt(shot: Shot, brand_voice: str, facts: dict) -> str:
     return (
         f"Brand voice: {brand_voice}\n{_facts_block(facts)}\n\n"
-        f"Write a single vivid text-to-video generation prompt for this shot "
-        f"(#{shot.index}, {shot.duration_s}s): {shot.scene_description}\n"
-        "Describe subject, setting, lighting, camera move, and mood in one rich paragraph. "
+        f"Write a single vivid text-to-image generation prompt for this image "
+        f"(#{shot.index}): {shot.scene_description}\n"
+        "Describe subject, setting, lighting, composition, and mood in one rich paragraph. "
         "Make it authentically Sri Lankan. Output only the prompt text."
     )
 
 
-def critique_prompt(
-    script_beats: list[ScriptBeat], shot_prompts: list[ShotPrompt], brand_voice: str
-) -> str:
-    beats = "\n".join(f"[{b.t_start_s}-{b.t_end_s}s] {b.voiceover}" for b in script_beats)
-    shots = "\n".join(f"#{p.index}: {p.t2v_prompt}" for p in shot_prompts)
+def critique_prompt(caption: str, shot_prompts: list[ShotPrompt], brand_voice: str) -> str:
+    shots = "\n".join(f"#{p.index}: {p.image_prompt}" for p in shot_prompts)
     return (
         f"You are a strict brand editor.\nBrand voice: {brand_voice}\n{PLATFORM_RULES}\n\n"
-        f"Script beats:\n{beats}\n\nShot prompts:\n{shots}\n\n"
+        f"Post caption:\n{caption}\n\nImage prompts:\n{shots}\n\n"
         "Judge whether this draft is on-brand and meets the platform rules. Set passed=true "
         "only if it clearly does. If not, list concrete issues and actionable suggestions."
     )
 
 
-def revise_prompt(script_beats: list[ScriptBeat], issues: list[str], suggestions: list[str]) -> str:
-    beats = "\n".join(f"[{b.t_start_s}-{b.t_end_s}s] {b.voiceover}" for b in script_beats)
+def revise_prompt(
+    caption: str,
+    issues: list[str],
+    suggestions: list[str],
+    *,
+    verbosity: str = "standard",
+    num_images: int = 4,
+) -> str:
     fixes = "\n".join(f"- {s}" for s in (suggestions or issues))
+    length = _VERBOSITY.get(verbosity, _VERBOSITY["standard"])
     return (
-        f"Revise this Reel script to address the feedback while keeping it ~30s and on-brand.\n"
-        f"Current script:\n{beats}\n\nFeedback to apply:\n{fixes}\n\n"
-        "Return the full revised set of timed beats (hook still in the first 3 seconds)."
+        "Revise this Instagram post copy to address the feedback while keeping it on-brand.\n"
+        f"Current caption:\n{caption}\n\nFeedback to apply:\n{fixes}\n\n"
+        f"{length} Return the full revised caption (hook still in the first line) and EXACTLY "
+        f"{num_images} on-screen text lines."
     )
 
 
@@ -110,7 +132,6 @@ def brief_copy_prompt(concept: ConceptIdea, brand_voice: str, facts: dict) -> st
     return (
         f"Brand voice: {brand_voice}\n{_facts_block(facts)}\n"
         f"Concept hook: {concept.hook}\n\n"
-        "Write the finishing copy for this Reel: a short call-to-action (cta), a music_mood "
-        "(a few words), and 4-6 relevant hashtags (no spaces, include the brand and origin). "
-        "No banned claims."
+        "Write the finishing copy for this Instagram post: a short call-to-action (cta) and "
+        "4-6 relevant hashtags (no spaces, include the brand and origin). No banned claims."
     )

@@ -25,10 +25,9 @@ from nora.observability import get_logger
 from nora.schemas import (
     ConceptIdea,
     Critique,
-    ScriptBeat,
+    PostBrief,
     Shot,
     ShotPrompt,
-    VideoBrief,
 )
 from nora.services.renderer import get_renderer
 
@@ -38,8 +37,9 @@ log = get_logger(__name__)
 # --- internal structured-output wrappers ----------------------------------------------
 
 
-class _ScriptDraft(BaseModel):
-    beats: list[ScriptBeat]
+class _PostCopy(BaseModel):
+    caption: str  # the Instagram caption body
+    on_screen_texts: list[str]  # one short overlay line per intended image
 
 
 class _Storyboard(BaseModel):
@@ -48,7 +48,6 @@ class _Storyboard(BaseModel):
 
 class _BriefCopy(BaseModel):
     cta: str
-    music_mood: str
     hashtags: list[str]
 
 
@@ -179,20 +178,32 @@ def make_choose_concept(settings: Settings, *, auto_choose: bool = True):
     return choose_concept
 
 
-def make_write_script(model, settings: Settings):
-    def write_script(state) -> dict:
+def _post_size(state, settings: Settings) -> tuple[int, str]:
+    """The operator-controlled post size + caption verbosity (seeded from settings when unset)."""
+    num_images = state.get("num_images") or settings.marketing_num_images
+    verbosity = state.get("verbosity") or settings.marketing_verbosity
+    return num_images, verbosity
+
+
+def make_write_copy(model, settings: Settings):
+    def write_copy(state) -> dict:
         facts = state["product_facts"]
         concept = ConceptIdea(**state["chosen_concept"])
-        prompt = prompts.script_prompt(concept, state["brand_voice"], facts, target_s=30)
-        draft = model.with_structured_output(_ScriptDraft).invoke(prompt)
-        return {"script_beats": [b.model_dump() for b in draft.beats]}
+        num_images, verbosity = _post_size(state, settings)
+        prompt = prompts.copy_prompt(
+            concept, state["brand_voice"], facts, verbosity=verbosity, num_images=num_images
+        )
+        draft = model.with_structured_output(_PostCopy).invoke(prompt)
+        # `num_images` is authoritative — cap the copy lines so the count is always what the operator chose.
+        lines = draft.on_screen_texts[:num_images]
+        return {"post_copy": {"caption": draft.caption, "on_screen_texts": lines}}
 
-    return write_script
+    return write_copy
 
 
 def make_human_review(settings: Settings, *, auto_approve: bool = False):
-    """The single HITL gate (M3). It sits BEFORE the expensive creative steps (storyboard +
-    per-shot prompts), so the operator approves/edits/rejects the script before compute is
+    """The single copy HITL gate (M3). It sits BEFORE the expensive creative steps (storyboard +
+    per-shot image prompts), so the operator approves/edits/rejects the post copy before compute is
     spent — gate by risk, not a final "are you sure?".
 
     `interrupt()` is called exactly once. The node re-runs from the top on resume, so the
@@ -200,21 +211,26 @@ def make_human_review(settings: Settings, *, auto_approve: bool = False):
     skips the pause entirely — used by the eval harness to run unattended.
     """
 
-    def human_review(state) -> Command[Literal["storyboard", "cancel"]]:
+    def human_review(state) -> Command[Literal["write_copy", "storyboard", "cancel"]]:
         if auto_approve:
             return Command(goto="storyboard", update={"approved": True})
 
-        log.info("hitl.raised", question="approve script")
+        post_copy = state["post_copy"]  # {"caption", "on_screen_texts"} — JSON-native state
+        num_images, verbosity = _post_size(state, settings)
+        log.info("hitl.raised", question="approve copy")
         decision = interrupt(
             {
-                "kind": "script_review",  # lets the UI distinguish this from the concept_pick gate
-                "question": "Approve this ~30s script before we generate the storyboard and "
-                "shot prompts?",
-                "script_beats": state["script_beats"],  # already dicts (JSON-native state)
+                "kind": "copy_review",  # lets the UI distinguish this from the concept_pick gate
+                "question": "Approve the post copy before we generate the images?",
+                "caption": post_copy["caption"],
+                "on_screen_texts": post_copy["on_screen_texts"],
+                # Seed the copy-gate controls so the operator can re-tune size/verbosity + regenerate.
+                "num_images": num_images,
+                "verbosity": verbosity,
             }
         )
         # Resume transport-normalization. useStream resumes with a structured
-        # Command(resume={"approved": ..., "edited_script": ...}) → `decision` is a dict. Some clients
+        # Command(resume={"approved": ..., "edited_copy": ...}) → `decision` is a dict. Some clients
         # resolve an interrupt with a JSON *string* instead, so parse it back to a dict here —
         # otherwise `bool("{...}")` is truthy for *any* non-empty string and reject/edits break.
         if isinstance(decision, str):
@@ -223,28 +239,40 @@ def make_human_review(settings: Settings, *, auto_approve: bool = False):
             except (ValueError, TypeError):
                 pass
 
+        # Regenerate: re-run write_copy with the operator's image-count + verbosity, then pause here
+        # again. Cheap — the images aren't rendered until after approval.
+        if isinstance(decision, dict) and decision.get("regenerate"):
+            n = decision.get("num_images", num_images)
+            n = n if isinstance(n, int) and 1 <= n <= 8 else num_images
+            v = decision.get("verbosity", verbosity)
+            v = v if v in ("concise", "standard", "detailed") else verbosity
+            return Command(goto="write_copy", update={"num_images": n, "verbosity": v})
+
         approved = decision.get("approved", False) if isinstance(decision, dict) else bool(decision)
         if not approved:
             return Command(goto="cancel", update={"approved": False})
 
         update: dict = {"approved": True}
-        edited = decision.get("edited_script") if isinstance(decision, dict) else None
-        if edited:  # honor an edited script — validate via the schema, then store as dicts
-            update["script_beats"] = [ScriptBeat(**beat).model_dump() for beat in edited]
+        edited = decision.get("edited_copy") if isinstance(decision, dict) else None
+        if edited:  # honor edited copy — validate the shape, then store as a dict
+            validated = _PostCopy(**edited)
+            update["post_copy"] = {
+                "caption": validated.caption,
+                "on_screen_texts": validated.on_screen_texts,
+            }
         return Command(goto="storyboard", update=update)
 
     return human_review
 
 
 def make_cancel(settings: Settings):
-    """Terminal node when the operator rejects the script."""
+    """Terminal node when the operator rejects the post copy."""
 
     def cancel(state) -> dict:
         log.info("marketing.cancelled")
         return {
             "render_result": {
                 "status": "cancelled",
-                "mode": "none",
                 "shots": [],
                 "detail": "creative cancelled by user",
             }
@@ -256,11 +284,21 @@ def make_cancel(settings: Settings):
 def make_storyboard(model, settings: Settings):
     def storyboard(state) -> dict:
         facts = state["product_facts"]
-        beats = [ScriptBeat(**b) for b in state["script_beats"]]
-        prompt = prompts.storyboard_prompt(beats, facts)
+        post_copy = state["post_copy"]
+        on_screen = post_copy.get("on_screen_texts") or []
+        prompt = prompts.storyboard_prompt(post_copy["caption"], on_screen, facts)
         board = model.with_structured_output(_Storyboard).invoke(prompt)
-        # Reset shot_prompts (None) so a revision loop doesn't accumulate stale prompts.
-        return {"shots": [s.model_dump() for s in board.shots], "shot_prompts": None}
+        num_images, _ = _post_size(state, settings)
+        # Pin each image's on-screen line by index (the approved copy is authoritative), falling back
+        # to whatever the model chose. Cap to the operator's `num_images` so the post size is exact.
+        # Reset shot_prompts (None) so a revision doesn't accumulate stale ones.
+        shots = []
+        for i, s in enumerate(board.shots[:num_images]):
+            d = s.model_dump()
+            if i < len(on_screen):
+                d["on_screen_text"] = on_screen[i]
+            shots.append(d)
+        return {"shots": shots, "shot_prompts": None}
 
     return storyboard
 
@@ -274,7 +312,7 @@ def make_shot_prompt_worker(model, settings: Settings):
         facts = payload["product_facts"]
         text = model.invoke(prompts.shot_prompt_prompt(shot, payload["brand_voice"], facts))
         content = text.content if hasattr(text, "content") else str(text)
-        return {"shot_prompts": [ShotPrompt(index=shot.index, t2v_prompt=content).model_dump()]}
+        return {"shot_prompts": [ShotPrompt(index=shot.index, image_prompt=content).model_dump()]}
 
     return shot_prompt_worker
 
@@ -283,9 +321,9 @@ def make_critique(model, settings: Settings):
     """Evaluator: score the draft against brand voice + platform rules."""
 
     def critique(state) -> dict:
-        beats = [ScriptBeat(**b) for b in state["script_beats"]]
+        caption = state["post_copy"]["caption"]
         shot_prompts = [ShotPrompt(**p) for p in state["shot_prompts"]]
-        prompt = prompts.critique_prompt(beats, shot_prompts, state["brand_voice"])
+        prompt = prompts.critique_prompt(caption, shot_prompts, state["brand_voice"])
         verdict = model.with_structured_output(Critique).invoke(prompt)
         log.info(
             "marketing.revision",
@@ -315,11 +353,18 @@ def make_route_after_critique(settings: Settings):
 def make_revise(model, settings: Settings):
     def revise(state) -> dict:
         verdict = state["critique"]  # Critique dict
-        beats = [ScriptBeat(**b) for b in state["script_beats"]]
-        prompt = prompts.revise_prompt(beats, verdict["issues"], verdict["suggestions"])
-        draft = model.with_structured_output(_ScriptDraft).invoke(prompt)
+        caption = state["post_copy"]["caption"]
+        num_images, verbosity = _post_size(state, settings)
+        prompt = prompts.revise_prompt(
+            caption, verdict["issues"], verdict["suggestions"],
+            verbosity=verbosity, num_images=num_images,
+        )
+        draft = model.with_structured_output(_PostCopy).invoke(prompt)
         return {
-            "script_beats": [b.model_dump() for b in draft.beats],
+            "post_copy": {
+                "caption": draft.caption,
+                "on_screen_texts": draft.on_screen_texts[:num_images],
+            },
             "revision_count": state.get("revision_count", 0) + 1,
         }
 
@@ -327,30 +372,27 @@ def make_revise(model, settings: Settings):
 
 
 def make_assemble(model, settings: Settings):
-    """Compose the final VideoBrief: structural fields come from state (so guardrails hold by
-    construction); the model fills only the finishing copy (cta, music mood, hashtags)."""
+    """Compose the final PostBrief: structural fields come from state (so guardrails hold by
+    construction); the model fills only the finishing copy (cta, hashtags)."""
 
     def assemble(state) -> dict:
         facts = state["product_facts"]
         # Rehydrate the JSON-native state fields into typed models for construction.
         concept = ConceptIdea(**state["chosen_concept"])
-        beats = [ScriptBeat(**b) for b in state["script_beats"]]
         shots = [Shot(**s) for s in state["shots"]]
         shot_prompts = sorted((ShotPrompt(**p) for p in state["shot_prompts"]), key=lambda p: p.index)
 
         copy = model.with_structured_output(_BriefCopy).invoke(
             prompts.brief_copy_prompt(concept, state["brand_voice"], facts)
         )
-        brief = VideoBrief(
+        brief = PostBrief(
             product_name=facts["name"],
             concept=concept.angle,
             hook=concept.hook,
-            target_duration_s=max((b.t_end_s for b in beats), default=30.0),
-            script_beats=beats,
+            caption=state["post_copy"]["caption"],
             shots=shots,
             shot_prompts=shot_prompts,
             cta=copy.cta,
-            music_mood=copy.music_mood,
             hashtags=copy.hashtags,
             product_facts_used=[
                 facts["name"],
@@ -365,22 +407,114 @@ def make_assemble(model, settings: Settings):
     return assemble
 
 
-def make_render(settings: Settings, *, renderer=None):
-    """Render the brief. Placeholder by default (no external call, no spend). `renderer` is
-    injectable so tests drive the real OpenRouter adapter offline against a fake client.
+def make_render_stills(settings: Settings, *, renderer=None):
+    """Staged render, step 1: generate the hero + per-shot stills, so the operator can review them
+    at the still-review gate before we finalize the Instagram post. Best-effort: a stills failure
+    degrades to an error result rather than crashing the turn."""
 
-    Best-effort: real rendering hits external HTTP (and a misconfig — `NORA_RENDERER=openrouter`
-    with no key — fails at construction), so a render failure degrades to an `error` result rather
-    than crashing the whole marketing turn. The brief + the other cards still ship."""
-
-    def render(state) -> dict:
+    def render_stills(state) -> dict:
         try:
             r = renderer or get_renderer(settings)
-            result = r.render(VideoBrief(**state["brief"]))
+            result = r.render_stills(PostBrief(**state["brief"]))
         except Exception as exc:  # noqa: BLE001 — never let rendering sink the finished brief
-            log.info("render.error", error=str(exc))
-            result = {"status": "error", "mode": "none", "shots": [],
-                      "detail": f"render failed: {exc}"}
-        return {"render_result": result}
+            log.info("render.stills.error", error=str(exc))
+            result = {"status": "error", "shots": [], "detail": f"stills failed: {exc}"}
+        return {"render_stills": result}
 
-    return render
+    return render_stills
+
+
+def make_still_review(settings: Settings, *, auto_approve_stills: bool = True):
+    """HITL gate on the generated stills — the visual analogue of the copy `human_review`. It sits
+    BEFORE the post is finalized, so the operator approves the images (or asks to re-roll specific
+    shots). `interrupt()` fires at most once per pass; the node re-runs on resume and routes from
+    the resumed decision.
+
+    Skips the pause (→ finalize_post) when `auto_approve_stills` is set (evals/tests), when there are
+    no reviewable stills (the placeholder renderer, or a stills error), or once the regenerate loop
+    reaches `stills_max_revisions`."""
+
+    def still_review(state) -> Command[Literal["regenerate_stills", "finalize_post"]]:
+        stills = state.get("render_stills") or {}
+        shots = stills.get("shots") or []
+        reviewable = any(s.get("image_url") for s in shots)
+        if (
+            auto_approve_stills
+            or not reviewable
+            or state.get("still_revision_count", 0) >= settings.stills_max_revisions
+        ):
+            return Command(goto="finalize_post")
+
+        log.info("hitl.raised", question="approve stills")
+        decision = interrupt(
+            {
+                "kind": "still_review",  # lets the UI distinguish this from the concept/copy gates
+                "question": "Approve these images for your Instagram post?",
+                "hero_image_url": stills.get("hero_image_url"),
+                "shots": [
+                    {
+                        "index": s["index"],
+                        "image_url": s.get("image_url"),
+                        "scene_description": s.get("scene_description"),
+                    }
+                    for s in shots
+                ],
+            }
+        )
+        # Same resume transport-normalization as human_review: a structured dict, or a JSON string
+        # some clients send when resolving an interrupt.
+        if isinstance(decision, str):
+            try:
+                decision = json.loads(decision)
+            except (ValueError, TypeError):
+                pass
+
+        regen = decision.get("regenerate") if isinstance(decision, dict) else None
+        if regen:  # re-roll the flagged shots (index -1 = the hero), then loop back to review
+            overrides = decision.get("prompt_overrides") if isinstance(decision, dict) else None
+            return Command(
+                goto="regenerate_stills",
+                update={"still_regen": {"indices": list(regen), "overrides": overrides or {}}},
+            )
+        return Command(goto="finalize_post")  # approved
+
+    return still_review
+
+
+def make_regenerate_stills(settings: Settings, *, renderer=None):
+    """Re-roll the stills the operator rejected (carried in `still_regen`), then loop back to the
+    still-review gate. Bounded: `still_revision_count` is incremented here and checked in the gate."""
+
+    def regenerate_stills(state) -> dict:
+        regen = state.get("still_regen") or {}
+        stills = state.get("render_stills") or {}
+        try:
+            r = renderer or get_renderer(settings)
+            stills = r.regenerate_stills(
+                PostBrief(**state["brief"]),
+                stills,
+                list(regen.get("indices") or []),
+                regen.get("overrides") or {},
+            )
+        except Exception as exc:  # noqa: BLE001 — a failed re-roll keeps the prior stills
+            log.info("render.stills.regenerate.error", error=str(exc))
+        return {
+            "render_stills": stills,
+            "still_revision_count": state.get("still_revision_count", 0) + 1,
+        }
+
+    return regenerate_stills
+
+
+def make_finalize_post(settings: Settings):
+    """Staged render, final step: promote the reviewed stills to the finished Instagram post. A pure
+    state transform (no renderer call) — the images were already generated + reviewed, so this just
+    marks the result `rendered` (or keeps placeholder/error) for the `marketing_render` card."""
+
+    def finalize_post(state) -> dict:
+        stills = state.get("render_stills") or {}
+        has_images = any(s.get("image_url") for s in (stills.get("shots") or []))
+        status = "rendered" if has_images else stills.get("status", "placeholder")
+        return {"render_result": {**stills, "status": status}}
+
+    return finalize_post

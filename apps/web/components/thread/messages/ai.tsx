@@ -22,9 +22,8 @@ import { AnalyticsDashboard } from "@/components/AnalyticsDashboard";
 import { CritiqueCard } from "@/components/CritiqueCard";
 import { MarketingRenderCard } from "@/components/MarketingRenderCard";
 import { RouteMapCard } from "@/components/operations/RouteMapCard";
-import { ScriptTimeline } from "@/components/ScriptTimeline";
+import { PostBriefCard } from "@/components/PostBriefCard";
 import { StoryboardFilmstrip } from "@/components/StoryboardFilmstrip";
-import { VideoBriefCard } from "@/components/VideoBriefCard";
 import { WorkspaceActionsCard } from "@/components/workspace/workspace-actions-card";
 import { cn, getContentString, getReasoningString } from "@/lib/utils";
 import { buildSubmitConfig } from "@/lib/run-config";
@@ -44,9 +43,8 @@ const UI_COMPONENTS = {
   // pushes this LLM-composed surface (A2uiSurface) instead of the fixed analytics_dashboard. It
   // matches none of the marketing/routing/workspace sets below, so the turn stays labeled analytics.
   a2ui_surface: A2uiSurfaceView,
-  video_brief: VideoBriefCard,
+  post_brief: PostBriefCard,
   marketing_storyboard: StoryboardFilmstrip,
-  marketing_script_timeline: ScriptTimeline,
   marketing_critique: CritiqueCard,
   marketing_render: MarketingRenderCard,
   route_map: RouteMapCard,
@@ -54,9 +52,8 @@ const UI_COMPONENTS = {
 };
 // ui.name values that mark a turn as the marketing workflow (drives the ModeChip).
 const MARKETING_UI = new Set([
-  "video_brief",
+  "post_brief",
   "marketing_storyboard",
-  "marketing_script_timeline",
   "marketing_critique",
   "marketing_render",
 ]);
@@ -409,7 +406,7 @@ function MessageBody({
       : undefined;
 
   // push_ui_message UI messages tagged to this AI message (analytics dashboard, or the marketing
-  // brief + storyboard/script/critique cards). Rendered regardless of whether the message has text.
+  // brief + storyboard/critique cards). Rendered regardless of whether the message has text.
   const uiForMessage = (stream.values.ui ?? []).filter(
     (ui) => (ui.metadata as { message_id?: string } | undefined)?.message_id === message.id,
   );

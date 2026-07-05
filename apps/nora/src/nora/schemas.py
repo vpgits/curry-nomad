@@ -1,6 +1,6 @@
 """Typed contracts for everything the LLMs read or write.
 
-Structured outputs (router decisions, concepts, scripts, the final VideoBrief) are Pydantic
+Structured outputs (router decisions, concepts, post copy, the final PostBrief) are Pydantic
 models — the model is forced to fill these shapes, which keeps the workflow deterministic and
 makes the marketing evals possible. `Context` is the per-run dataclass injected into nodes via
 `context_schema` (LangGraph requires a dataclass/TypedDict here, not a Pydantic model).
@@ -33,22 +33,15 @@ class ConceptIdea(BaseModel):
     rationale: str
 
 
-class ScriptBeat(BaseModel):
-    t_start_s: float
-    t_end_s: float
-    voiceover: str
-    on_screen_text: str | None = None
-
-
 class Shot(BaseModel):
     index: int
-    scene_description: str
-    duration_s: float
+    scene_description: str  # what the still image depicts
+    on_screen_text: str | None = None  # short caption/overlay line for this image
 
 
 class ShotPrompt(BaseModel):
     index: int
-    t2v_prompt: str  # the text-to-video generation prompt for this shot
+    image_prompt: str  # the text-to-image generation prompt for this shot
 
 
 class Critique(BaseModel):
@@ -59,56 +52,52 @@ class Critique(BaseModel):
     suggestions: list[str] = Field(default_factory=list)
 
 
-class VideoBrief(BaseModel):
-    """The final creative package the marketing workflow produces."""
+class PostBrief(BaseModel):
+    """The final creative package the marketing workflow produces: an Instagram image post."""
 
     product_name: str
     concept: str
     hook: str
-    target_duration_s: float
-    platform: str = "instagram_reel"
-    script_beats: list[ScriptBeat]
-    shots: list[Shot]
+    caption: str  # the post caption body (hook first line → origin story → CTA)
+    shots: list[Shot]  # the images (each may carry an on-screen text line)
     shot_prompts: list[ShotPrompt]
     cta: str
-    music_mood: str
     hashtags: list[str]
     product_facts_used: list[str]  # for the grounding eval
 
 
-# --- Marketing render (real media generation via OpenRouter) --------------------------
+# --- Marketing render (real image generation via OpenRouter) --------------------------
 #
-# What the OpenRouterRenderer produces from a finished VideoBrief: a hero image, a still per shot,
-# and (async) one video job per shot. Images are generated synchronously; videos are submitted as
-# OpenRouter jobs and polled from the UI, so each shot carries its job id rather than a finished
-# URL. Rendered over the same push_ui_message channel as the other marketing cards.
+# What the OpenRouterRenderer produces from a finished PostBrief: a hero image + a still per shot,
+# generated synchronously via OpenRouter `/images`. Together they make up the Instagram post,
+# rendered over the same push_ui_message channel as the other marketing cards.
 
 
 class RenderShot(BaseModel):
-    """One storyboard shot's rendered assets. `image_url` is ready immediately; the video is a
-    pending OpenRouter job the UI polls (`video_job_id`) until it completes."""
+    """One shot rendered as a still image for the Instagram post."""
 
     index: int
     scene_description: str
-    t2v_prompt: str
-    image_url: str | None = None  # served still (first frame), or None if image gen failed
-    video_job_id: str | None = None  # OpenRouter /videos job id, or None if submission failed
+    image_prompt: str  # the text-to-image generation prompt for this shot
+    image_url: str | None = None  # served still, or None if image gen failed
     error: str | None = None
 
 
 class RenderResult(BaseModel):
     """The renderer's output (the `render_result` in marketing state + the `marketing_render` card).
 
-    `status`: placeholder (no render) | rendering (jobs submitted, UI polls) | rendered (sync-only)
-    | cancelled | error. `mode` records whether videos are first-frame-conditioned (`image_to_video`,
-    when a public media URL is configured) or `text_to_video` (the local fallback)."""
+    `status`: placeholder (no render) | stills_ready (images generated, awaiting the human review
+    gate) | rendered (approved/finalized post) | cancelled | error. `render_id` is the media
+    sub-directory the stills were written to, so a regenerate pass can reuse it across the
+    still-review loop."""
 
-    status: Literal["placeholder", "rendering", "rendered", "cancelled", "error"] = "placeholder"
-    mode: Literal["image_to_video", "text_to_video", "none"] = "none"
+    status: Literal[
+        "placeholder", "stills_ready", "rendered", "cancelled", "error"
+    ] = "placeholder"
     hero_image_url: str | None = None
     shots: list[RenderShot] = Field(default_factory=list)
     image_model: str | None = None
-    video_model: str | None = None
+    render_id: str | None = None
     detail: str = ""
 
 
@@ -177,19 +166,30 @@ class A2uiMetric(BaseModel):
     trend_value: str | None = None
 
 
+class A2uiField(BaseModel):
+    """One label→value detail row in a `fields` block — the natural way to render a single record or
+    entity as a card (a calendar event's Title/When/Where, an order's Id/Customer/Total, an email's
+    From/Subject/Date). `value` is pre-formatted text."""
+
+    label: str
+    value: str
+
+
 class A2uiBlock(BaseModel):
     """One block of an authored surface. `type` selects which fields are used:
-    heading/text → text; metrics → metrics; chart → title + chart_kind + series; table → columns + rows.
+    heading/text → text; metrics → metrics; fields → fields; chart → title + chart_kind + series;
+    table → columns + rows.
 
     Deliberately ONE flat model (with optional per-type fields), NOT a discriminated union: OpenAI's
     strict structured-output mode rejects anyOf/oneOf/discriminator, so a union here makes the
     authoring call throw (and the surface silently never renders). This mirrors AnalyticsDashboard,
     whose flat optional fields are proven to work with with_structured_output."""
 
-    type: Literal["heading", "text", "metrics", "chart", "table"]
+    type: Literal["heading", "text", "metrics", "fields", "chart", "table"]
     text: str | None = None  # heading / text
     metrics: list[A2uiMetric] | None = None  # metrics
-    title: str | None = None  # chart
+    fields: list[A2uiField] | None = None  # fields (label→value detail rows for one record/entity)
+    title: str | None = None  # chart / a title above a fields or table block
     chart_kind: Literal["bar", "line", "pie"] | None = None  # chart
     series: list[ChartPoint] | None = None  # chart
     columns: list[str] | None = None  # table

@@ -20,14 +20,14 @@ export function HomeDashboard() {
   const attention: AttentionItem[] = [];
   if (s.pendingApprovals > 0) {
     attention.push({
-      href: "/briefs",
+      href: "/ask",
       icon: Play,
       tone: "brand",
       title:
         s.pendingApprovals === 1
-          ? "Video ad awaiting your review"
-          : `${s.pendingApprovals} video ads awaiting review`,
-      sub: "Marketing workflow paused before storyboard",
+          ? "Instagram post awaiting your review"
+          : `${s.pendingApprovals} Instagram posts awaiting review`,
+      sub: "Marketing workflow paused for copy review",
       action: "Review →",
       primary: true,
     });

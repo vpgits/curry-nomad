@@ -54,7 +54,7 @@ from nora.observability import (  # noqa: E402
     score_trace,
     setup_logging,
 )
-from nora.schemas import VideoBrief  # noqa: E402
+from nora.schemas import PostBrief  # noqa: E402
 from nora.services.spice_db import build_spice_db  # noqa: E402
 
 log = get_logger(__name__)
@@ -175,7 +175,7 @@ def run_marketing_suite(
     for row in _load_jsonl(dataset_path):
         config = _langfuse_config(handler, suite="marketing", item_id=row["id"])
         result = graph.invoke(initial_marketing_state(row["request"], row["product_name"]), config)
-        brief = VideoBrief(**result["brief"])  # state stores a dict; rehydrate for the evaluators
+        brief = PostBrief(**result["brief"])  # state stores a dict; rehydrate for the evaluators
         passed, failures = check_guardrails(brief, spice_db)
         score = judge_brief(brief, DEFAULT_BRAND_VOICE, judge_model) if judge_model else None
         record = {

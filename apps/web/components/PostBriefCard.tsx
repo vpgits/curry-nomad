@@ -1,6 +1,6 @@
 "use client";
 
-import { Clapperboard, Film, Hash, Megaphone, Music2, Quote } from "lucide-react";
+import { AlignLeft, Hash, Image as ImageIcon, Megaphone, Quote } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import {
@@ -11,48 +11,58 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import type { VideoBrief } from "@/lib/types";
+import type { PostBrief } from "@/lib/types";
 
-// Renders the final creative package the marketing workflow produces.
-export function VideoBriefCard({ brief }: { brief: VideoBrief }) {
+// Renders the final creative package the marketing workflow produces — an Instagram image post.
+export function PostBriefCard({ brief }: { brief: PostBrief }) {
   return (
     <Card className="gap-4">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <Clapperboard className="size-4 text-muted-foreground" />
-          Video brief — {brief.product_name}
+          <ImageIcon className="size-4 text-muted-foreground" />
+          Instagram post — {brief.product_name}
         </CardTitle>
-        <CardDescription>
-          {brief.concept} · ~{Math.round(brief.target_duration_s)}s · {brief.platform}
-        </CardDescription>
+        <CardDescription>{brief.concept}</CardDescription>
       </CardHeader>
 
       <CardContent className="space-y-4">
         <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
           <Stat label="Hook" value={brief.hook} />
           <Stat label="Call to action" value={brief.cta} icon={<Megaphone className="size-3" />} />
-          <Stat label="Music mood" value={brief.music_mood} icon={<Music2 className="size-3" />} />
           <Stat
-            label="Shots"
-            value={`${brief.shots.length} shots · ${brief.shot_prompts.length} prompts`}
+            label="Images"
+            value={`${brief.shots.length} images`}
+            icon={<ImageIcon className="size-3" />}
           />
         </div>
 
         <Separator />
 
         <section className="space-y-2">
-          <SectionTitle icon={<Film className="size-3.5" />}>Script</SectionTitle>
-          <div className="space-y-2">
-            {brief.script_beats.map((b) => (
-              <div key={b.t_start_s} className="border-l-2 border-border pl-3">
-                <div className="font-mono text-xs text-muted-foreground">
-                  {b.t_start_s}s – {b.t_end_s}s
-                </div>
-                <p className="text-sm leading-relaxed">{b.voiceover}</p>
-              </div>
-            ))}
-          </div>
+          <SectionTitle icon={<AlignLeft className="size-3.5" />}>Caption</SectionTitle>
+          <p className="text-sm leading-relaxed whitespace-pre-line">{brief.caption}</p>
         </section>
+
+        {brief.shots.some((s) => s.on_screen_text) && (
+          <>
+            <Separator />
+            <section className="space-y-2">
+              <SectionTitle icon={<Quote className="size-3.5" />}>On-screen text</SectionTitle>
+              <div className="space-y-2">
+                {brief.shots.map((s) => (
+                  <div key={s.index} className="border-l-2 border-border pl-3">
+                    <div className="font-mono text-xs text-muted-foreground">
+                      Image {s.index + 1}
+                    </div>
+                    <p className="text-sm leading-relaxed">
+                      {s.on_screen_text || s.scene_description}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </>
+        )}
 
         <Separator />
 

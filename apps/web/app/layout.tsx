@@ -42,9 +42,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <TooltipProvider delayDuration={0}>
             {/* ThreadProvider (Aegra thread history) + the nuqs Suspense boundary + StreamProvider
                 are all hoisted here so every route shares ONE stream on ONE threadId. That's what
-                lets a marketing run paused on /ask be reviewed + resumed on /briefs, and the sidebar
-                "Recent" list work app-wide. StreamProvider reads threadId from the URL and never
-                auto-submits, so it's inert on non-chat pages. */}
+                lets a paused marketing run stay live across navigation (the HITL gates resume inline
+                on /ask) and the sidebar "Recent" list work app-wide. StreamProvider reads threadId
+                from the URL and never auto-submits, so it's inert on non-chat pages. */}
             <ThreadProvider>
               <Suspense fallback={null}>
                 <StreamProvider>{children}</StreamProvider>

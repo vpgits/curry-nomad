@@ -1,6 +1,6 @@
 "use client";
 
-import { Component, type ReactNode } from "react";
+import { Component, type ErrorInfo, type ReactNode } from "react";
 import { CircleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,18 @@ export class ChatErrorBoundary extends Component<
 
   static getDerivedStateFromError(error: Error) {
     return { error };
+  }
+
+  // [gen-ui-debug] If the WHOLE screen blanks, the throw reached this page-root boundary. Log the
+  // error + React component stack so we can see which component threw (remove after diagnosing).
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error(
+      "%c[gen-ui-debug] ChatErrorBoundary caught (WHOLE-SCREEN blank):",
+      "color:#c0392b;font-weight:bold",
+      error,
+      "\ncomponentStack:",
+      info?.componentStack,
+    );
   }
 
   render() {

@@ -1,6 +1,7 @@
 "use client";
 
 import { Lightbulb, Quote } from "lucide-react";
+import { useQueryState } from "nuqs";
 
 import { NoraAvatar } from "@/components/thread/messages/ai";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,7 @@ import {
 } from "@/components/ui/card";
 import type { ConceptPickInterrupt } from "@/lib/types";
 import { buildSubmitConfig } from "@/lib/run-config";
+import { logHitlStep } from "@/lib/hitl-log";
 import { useSubmitLock } from "@/lib/use-submit-lock";
 import { useStreamContext } from "@/providers/Stream";
 
@@ -24,18 +26,27 @@ export function ConceptPicker({ interrupt }: { interrupt: ConceptPickInterrupt }
   const stream = useStreamContext();
   const busy = stream.isLoading;
   const [locked, runLocked] = useSubmitLock();
+  const [threadId] = useQueryState("threadId");
 
   // Carry the run config (Google token + Author-UI mode) on resume: run config is NOT persisted across
   // an interrupt, so a marketing→workspace chain resumed from here would otherwise reach the workspace
-  // node tokenless and stub out. The lock blocks a double-fire during the token fetch.
+  // node tokenless and stub out. The lock blocks a double-fire during the token fetch. Then record the
+  // pick so it stays in the conversation loop after the gate clears.
   const choose = (chosen_index: number) =>
     runLocked(async () => {
       const runConfig = await buildSubmitConfig();
+      // Anchor to the message this pick followed so the record renders inline at the right turn.
+      const anchorId = stream.messages[stream.messages.length - 1]?.id;
       stream.submit(undefined, {
         command: { resume: { chosen_index } },
         streamMode: ["values"],
         streamSubgraphs: true,
         ...runConfig,
+      });
+      logHitlStep(threadId, {
+        icon: "concept",
+        label: `Concept: ${interrupt.concepts[chosen_index]?.angle ?? `#${chosen_index + 1}`}`,
+        anchorId,
       });
     });
 

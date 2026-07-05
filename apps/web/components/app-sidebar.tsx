@@ -10,7 +10,6 @@ import {
   ChevronRight,
   Home,
   LogOut,
-  Megaphone,
   MessageSquare,
   Package,
   ScrollText,
@@ -62,7 +61,7 @@ const NAV_OPS: NavItem[] = [
   { href: "/orders", label: "Orders", icon: ScrollText },
   { href: "/routes", label: "Routes", icon: Truck },
 ];
-const NAV_MKT: NavItem[] = [{ href: "/briefs", label: "Briefs", icon: Megaphone, dot: true }];
+// Marketing has no dedicated page — it's the inline HITL flow on /ask (Ask Nora), so no nav group.
 
 // The title is stamped onto thread metadata at creation (StreamProvider.onThreadId) — Aegra's
 // search doesn't return state values, so we can't read messages here.
@@ -263,19 +262,6 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        <SidebarGroup>
-          <SidebarGroupLabel className="font-mono text-[9.5px] tracking-[0.12em] text-muted-foreground uppercase">
-            Marketing
-          </SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {NAV_MKT.map((item) => (
-                <NavRow key={item.href} item={item} active={pathname === item.href} />
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
         {/* Compact, collapsible conversation history — kept so paused/past runs stay reachable. */}
         <Collapsible
           defaultOpen
@@ -288,7 +274,9 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
             >
               <CollapsibleTrigger>
                 Recent
-                <ChevronRight className="ml-auto size-3.5 transition-transform group-data-[state=open]/recent:rotate-90" />
+                {/* Chevron sits next to the label (not ml-auto) so it doesn't collide with the
+                    absolutely-positioned "New chat" action that also lives in the top-right corner. */}
+                <ChevronRight className="ml-1 size-3.5 transition-transform group-data-[state=open]/recent:rotate-90" />
               </CollapsibleTrigger>
             </SidebarGroupLabel>
             <SidebarGroupAction title="New chat" onClick={newChat}>

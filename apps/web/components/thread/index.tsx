@@ -1,86 +1,43 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import Link from "next/link";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useQueryState } from "nuqs";
 import { useSession } from "next-auth/react";
-import { ArrowDown, ArrowUp, Sparkles, Square } from "lucide-react";
+import { ArrowDown, ArrowUp, Square } from "lucide-react";
 import type { Message } from "@langchain/langgraph-sdk";
 
 import { AppShell } from "@/components/app-shell";
 import { ConceptPicker } from "@/components/ConceptPicker";
+import { CopyReview } from "@/components/CopyReview";
+import { StillReview } from "@/components/StillReview";
 import { WorkspaceApproval } from "@/components/workspace/workspace-approval";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { isWorkspaceApproval } from "@/lib/types";
 import type { ThreadInterrupt } from "@/lib/types";
 import { AUTH_REQUIRED, WORKSPACE_ENABLED } from "@/lib/config";
-import { cn } from "@/lib/utils";
-import { buildSubmitConfig, AUTHOR_UI_KEY } from "@/lib/run-config";
+import { buildSubmitConfig } from "@/lib/run-config";
 import { useStreamContext } from "@/providers/Stream";
 import { SignInGate } from "@/components/auth/sign-in-gate";
 import { WorkspaceConnect } from "@/components/workspace/workspace-connect";
-import { AskNoraModeLane } from "./AskNoraModeLane";
 import { CardErrorBoundary } from "./card-error-boundary";
+import { useHitlSteps } from "@/lib/hitl-log";
+import { ResolvedSteps } from "./ResolvedSteps";
 import { AssistantTurn, NoraAvatar } from "./messages/ai";
 import { HumanMessage } from "./messages/human";
 
 const SUGGESTIONS = [
   "What was our best-selling product in Colombo last quarter?",
-  "Make a 30s video ad for it",
+  "Make an Instagram post for it",
   "What's the refund rate on blends?",
   ...(WORKSPACE_ENABLED
     ? ["Email priya@example.com that the cloves shipment is delayed two days"]
     : []),
 ];
 
-// A boolean preference persisted to localStorage, read via useSyncExternalStore so it's SSR-safe and
-// has no setState-in-effect. getServerSnapshot returns `defaultValue`, which React also uses for the
-// first client render, so hydration matches; React then re-reads the real value post-hydration. The
-// snapshot is a primitive boolean (Object.is-stable), so there's no render loop. The setter writes
-// through and dispatches a synthetic `storage` event so the current tab re-reads (the native event
-// only fires in OTHER tabs); listening to real `storage` events keeps tabs in sync too.
-function useLocalStorageBoolean(key: string, defaultValue: boolean) {
-  const subscribe = useCallback(
-    (onChange: () => void) => {
-      const handler = (e: StorageEvent) => {
-        if (e.key === null || e.key === key) onChange();
-      };
-      window.addEventListener("storage", handler);
-      return () => window.removeEventListener("storage", handler);
-    },
-    [key],
-  );
-  const getSnapshot = useCallback(() => {
-    try {
-      return window.localStorage.getItem(key) === "true";
-    } catch {
-      return defaultValue;
-    }
-  }, [key, defaultValue]);
-  const value = useSyncExternalStore(subscribe, getSnapshot, () => defaultValue);
-  const set = useCallback(
-    (next: boolean) => {
-      try {
-        window.localStorage.setItem(key, String(next));
-      } catch {
-        /* localStorage unavailable (private mode / SSR) — ignore */
-      }
-      window.dispatchEvent(new StorageEvent("storage", { key }));
-    },
-    [key],
-  );
-  return [value, set] as const;
-}
-
 export function Thread() {
   const stream = useStreamContext();
   const [threadId] = useQueryState("threadId");
-  // "Author UI" output mode — a GLOBAL, persisted preference (not a URL param), so it survives
-  // navigating between threads instead of silently resetting. It's an on-demand per-run rendering
-  // choice: when on, each message you send asks the analytics path to COMPOSE a custom UI surface
-  // (config.configurable.ui_mode="authored") instead of the fixed dashboard, until you turn it off.
-  const [authorUi, setAuthorUi] = useLocalStorageBoolean(AUTHOR_UI_KEY, false);
   const [input, setInput] = useState("");
   const { status } = useSession();
 
@@ -91,7 +48,6 @@ export function Thread() {
 
   // The last turn is human (or empty) → the model hasn't started replying yet → show the dots.
   const lastIsHuman = messages.length > 0 && messages[messages.length - 1].type === "human";
-  const briefsHref = threadId ? `/briefs?threadId=${threadId}` : "/briefs";
 
   const send = async (text: string) => {
     const content = text.trim();
@@ -133,46 +89,21 @@ export function Thread() {
   }
 
   return (
-    <AppShell
-      title="Ask Nora"
-      subtitle="Analytics agent + marketing workflow"
-      hideAsk
-    >
-      <AskNoraModeLane />
+    <AppShell title="Ask Nora" hideAsk>
       <MessageList
         messages={messages}
         isLoading={isLoading}
         lastIsHuman={lastIsHuman}
         interrupt={interrupt}
         isEmpty={isEmpty}
-        briefsHref={briefsHref}
+        threadId={threadId}
         onPick={send}
       />
 
       <footer className="shrink-0 border-t bg-background">
         <WorkspaceConnect />
-        <div className="mx-auto flex max-w-3xl items-center justify-end px-[26px] pt-3">
-          {/* Output-mode toggle: an on-demand, persisted preference. When on, each answer comes back
-              as an LLM-authored A2UI surface instead of the fixed dashboard (sets ui_mode="authored"
-              on the run), and it stays on across threads until you turn it off. */}
-          <button
-            type="button"
-            onClick={() => setAuthorUi(!authorUi)}
-            aria-pressed={authorUi}
-            title="Compose a custom UI for your next answer (applies until you turn it off)"
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-semibold transition-colors",
-              authorUi
-                ? "border-brand-edge bg-brand-tint text-brand-text"
-                : "border-border bg-card text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <Sparkles className="size-3.5" />
-            Author UI
-          </button>
-        </div>
         <form
-          className="mx-auto flex max-w-3xl items-center gap-2.5 px-[26px] pt-2.5 pb-4"
+          className="mx-auto flex max-w-7xl items-center gap-2.5 px-[26px] pt-2 pb-3.5"
           onSubmit={(e) => {
             e.preventDefault();
             void send(input);
@@ -181,8 +112,8 @@ export function Thread() {
           <Input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask about the business, or ask for a video ad…"
-            className="h-12 rounded-[11px] text-[13.5px]"
+            placeholder="Ask about the business, or ask for an Instagram post…"
+            className="h-11 rounded-[11px] text-[13.5px]"
           />
           {isLoading ? (
             <Button
@@ -190,7 +121,7 @@ export function Thread() {
               size="icon"
               variant="outline"
               onClick={() => stream.stop()}
-              className="size-12 shrink-0 rounded-[11px]"
+              className="size-11 shrink-0 rounded-[11px]"
               aria-label="Stop"
             >
               <Square className="size-4" />
@@ -200,7 +131,7 @@ export function Thread() {
               type="submit"
               size="icon"
               disabled={!input.trim()}
-              className="size-12 shrink-0 rounded-[11px]"
+              className="size-11 shrink-0 rounded-[11px]"
               aria-label="Send message"
             >
               <ArrowUp className="size-5" />
@@ -243,7 +174,7 @@ function MessageList({
   lastIsHuman,
   interrupt,
   isEmpty,
-  briefsHref,
+  threadId,
   onPick,
 }: {
   messages: Message[];
@@ -251,10 +182,12 @@ function MessageList({
   lastIsHuman: boolean;
   interrupt: ThreadInterrupt | undefined;
   isEmpty: boolean;
-  briefsHref: string;
+  threadId: string | null;
   onPick: (text: string) => void;
 }) {
   const turns = groupTurns(messages);
+  // Resolved-HITL records for this thread, rendered INLINE after the turn each one is anchored to.
+  const hitlSteps = useHitlSteps(threadId);
   const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
@@ -287,7 +220,7 @@ function MessageList({
       onScroll={onScroll}
       className="relative min-h-0 flex-1 overflow-y-auto bg-body-bg"
     >
-      <div className="mx-auto max-w-3xl px-[26px] py-6">
+      <div className="mx-auto max-w-7xl px-[26px] py-5">
         {isEmpty ? (
           <EmptyState onPick={onPick} />
         ) : (
@@ -297,35 +230,54 @@ function MessageList({
                 segments its messages into supervisor→subagent delegation boundaries + lanes. Tool
                 messages are dropped from the turn here but stay in stream.messages, so each is still
                 paired into its tool-step card via the resultFor lookup inside the lane. */}
-            {turns.map((turn, idx) => (
-              <Fragment key={turn.key}>
-                {turn.human && (
-                  <HumanMessage message={turn.human} isLoading={isLoading} />
-                )}
-                {turn.ai.length > 0 && (
-                  // Per-turn boundary: a render error in one assistant turn (outside a gen-UI card)
-                  // degrades to an inline notice instead of blanking the whole /ask screen.
-                  <CardErrorBoundary label="this response" resetKeys={[turn.ai.length, isLoading]}>
-                    <AssistantTurn
-                      messages={turn.ai}
-                      isLoading={isLoading}
-                      isActive={isLoading && idx === turns.length - 1}
-                    />
-                  </CardErrorBoundary>
-                )}
-              </Fragment>
-            ))}
+            {turns.map((turn, idx) => {
+              // Resolved HITL records anchored to a message in THIS turn — rendered inline, in order,
+              // right where the gate was. Records with no anchor (pre-anchoring cruft) don't show.
+              const turnSteps = hitlSteps.filter(
+                (st) =>
+                  st.anchorId != null &&
+                  (st.anchorId === turn.human?.id || turn.ai.some((m) => m.id === st.anchorId)),
+              );
+              return (
+                <Fragment key={turn.key}>
+                  {turn.human && <HumanMessage message={turn.human} isLoading={isLoading} />}
+                  {turn.ai.length > 0 && (
+                    // Per-turn boundary: a render error in one assistant turn (outside a gen-UI card)
+                    // degrades to an inline notice instead of blanking the whole /ask screen.
+                    <CardErrorBoundary label="this response" resetKeys={[turn.ai.length, isLoading]}>
+                      <AssistantTurn
+                        messages={turn.ai}
+                        isLoading={isLoading}
+                        isActive={isLoading && idx === turns.length - 1}
+                      />
+                    </CardErrorBoundary>
+                  )}
+                  {/* Resolved HITL decisions for this turn (gates are transient and leave no message),
+                      inline and in order — concept pick, copy/still review, workspace approvals. */}
+                  {turnSteps.length > 0 && <ResolvedSteps steps={turnSteps} />}
+                </Fragment>
+              );
+            })}
 
-            {/* Two HITL gates. The concept-pick gate is an inline interactive selection (resumes
-                right here); the script-review gate hands off to the dedicated /briefs surface. */}
-            {interrupt &&
-              (isWorkspaceApproval(interrupt) ? (
-                <WorkspaceApproval interrupt={interrupt} />
-              ) : interrupt.kind === "concept_pick" ? (
-                <ConceptPicker interrupt={interrupt} />
-              ) : (
-                <MarketingProgressCard briefsHref={briefsHref} />
-              ))}
+            {/* HITL gates, all inline in the conversation: concept pick, copy review (caption + post
+                settings), still review, and workspace write-approval. Each resumes the paused run in
+                place. */}
+            {interrupt && (
+              <CardErrorBoundary
+                label={`interrupt:${interrupt.kind ?? "?"}`}
+                resetKeys={[interrupt.kind ?? null, turns.length, isLoading]}
+              >
+                {isWorkspaceApproval(interrupt) ? (
+                  <WorkspaceApproval interrupt={interrupt} />
+                ) : interrupt.kind === "still_review" ? (
+                  <StillReview interrupt={interrupt} />
+                ) : interrupt.kind === "concept_pick" ? (
+                  <ConceptPicker interrupt={interrupt} />
+                ) : (
+                  <CopyReview key={interrupt.caption} interrupt={interrupt} />
+                )}
+              </CardErrorBoundary>
+            )}
 
             {isLoading && lastIsHuman && <ThinkingIndicator />}
           </div>
@@ -348,40 +300,6 @@ function MessageList({
   );
 }
 
-// The marketing workflow paused for review — a compact progress card that hands off to /briefs.
-function MarketingProgressCard({ briefsHref }: { briefsHref: string }) {
-  return (
-    <div className="flex items-start gap-3">
-      <NoraAvatar />
-      <div className="min-w-0 flex-1 space-y-2">
-        <div className="flex items-center gap-2">
-          <span className="text-[13px] font-semibold">Nora</span>
-          <span className="rounded-full border border-brand-edge bg-brand-tint px-2 py-px text-[9.5px] font-semibold text-brand-text">
-            Marketing workflow
-          </span>
-        </div>
-        <div className="rounded-[5px_13px_13px_13px] border border-brand-edge bg-brand-tint/30 px-[15px] py-3.5">
-          <div className="mb-2.5 text-[12.5px] text-muted-foreground">
-            Concept → script → <b className="text-brand-text">your review</b> → storyboard → prompts
-          </div>
-          <div className="h-1.5 overflow-hidden rounded-full bg-brand-edge/50">
-            <div className="h-full w-[52%] bg-brand" />
-          </div>
-          <div className="mt-3 text-[13.5px] font-medium">
-            Script is ready — paused for your approval before I spend compute on the storyboard.
-          </div>
-          <Link
-            href={briefsHref}
-            className="mt-2.5 inline-block rounded-[8px] bg-ink px-[15px] py-2 text-[12.5px] font-medium text-ink-foreground"
-          >
-            Open review →
-          </Link>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function EmptyState({ onPick }: { onPick: (text: string) => void }) {
   return (
     <div className="flex flex-col items-center gap-6 py-16 text-center">
@@ -391,8 +309,8 @@ function EmptyState({ onPick }: { onPick: (text: string) => void }) {
       <div className="space-y-1.5">
         <h2 className="text-xl font-semibold">How can Nora help?</h2>
         <p className="mx-auto max-w-md text-sm text-muted-foreground">
-          Ask about the business and the analytics <b>agent</b> answers; ask for an ad and the
-          marketing <b>workflow</b> builds a brief — with a human-review gate.
+          Ask about the business and the analytics <b>agent</b> answers; ask for an Instagram post
+          and the marketing <b>workflow</b> builds one — with a human-review gate.
         </p>
       </div>
       <div className="flex flex-wrap justify-center gap-2">

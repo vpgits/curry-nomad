@@ -1,4 +1,4 @@
-// Mirrors the Pydantic contracts in apps/nora/src/nora/schemas.py (the marketing VideoBrief),
+// Mirrors the Pydantic contracts in apps/nora/src/nora/schemas.py (the marketing PostBrief),
 // the human_review interrupt payload, and the custom additional_kwargs the orchestrator attaches
 // to its final messages (see apps/nora/src/nora/orchestrator.py) — so the UI renders them
 // type-safely.
@@ -12,13 +12,6 @@ export interface ConceptIdea {
   rationale: string;
 }
 
-export interface ScriptBeat {
-  t_start_s: number;
-  t_end_s: number;
-  voiceover: string;
-  on_screen_text?: string | null;
-}
-
 export interface Critique {
   passed: boolean;
   issues: string[];
@@ -28,25 +21,22 @@ export interface Critique {
 export interface Shot {
   index: number;
   scene_description: string;
-  duration_s: number;
+  on_screen_text?: string | null;
 }
 
 export interface ShotPrompt {
   index: number;
-  t2v_prompt: string;
+  image_prompt: string;
 }
 
-export interface VideoBrief {
+export interface PostBrief {
   product_name: string;
   concept: string;
   hook: string;
-  target_duration_s: number;
-  platform: string;
-  script_beats: ScriptBeat[];
+  caption: string;
   shots: Shot[];
   shot_prompts: ShotPrompt[];
   cta: string;
-  music_mood: string;
   hashtags: string[];
   product_facts_used: string[];
 }
@@ -66,7 +56,7 @@ export interface ToolTraceStep {
 }
 
 // The custom payload the orchestrator stashes on its final AI message. (The marketing brief used
-// to live here as `video_brief`; it now rides the generative-UI channel via push_ui_message.)
+// to live here as `post_brief`; it now rides the generative-UI channel via push_ui_message.)
 export interface NoraAdditionalKwargs {
   tool_trace?: ToolTraceStep[];
   // Fallback chain-of-thought location: Anthropic surfaces reasoning as `thinking` content blocks
@@ -74,17 +64,26 @@ export interface NoraAdditionalKwargs {
   reasoning_content?: string;
 }
 
-// Payload emitted by the marketing human_review node's interrupt().
+// Payload emitted by the marketing human_review node's interrupt() — the post-copy review gate.
+export type Verbosity = "concise" | "standard" | "detailed";
+
 export interface ReviewInterrupt {
-  kind?: "script_review";
+  kind?: "copy_review";
   question: string;
-  script_beats: ScriptBeat[];
+  caption: string;
+  on_screen_texts: string[];
+  num_images: number; // seeds the copy-gate stepper (1–8)
+  verbosity: Verbosity; // seeds the copy-gate verbosity control
 }
 
-// What we send back on resume (read by human_review in nodes.py).
+// What we send back on resume (read by human_review in nodes.py). `regenerate` re-runs write_copy
+// with the operator's `num_images`/`verbosity` (cheap — images render after approval).
 export interface ReviewDecision {
-  approved: boolean;
-  edited_script?: ScriptBeat[];
+  approved?: boolean;
+  edited_copy?: { caption: string; on_screen_texts: string[] };
+  regenerate?: boolean;
+  num_images?: number;
+  verbosity?: Verbosity;
 }
 
 // Payload emitted by the marketing choose_concept node's interrupt (the concept-pick gate).
@@ -94,8 +93,32 @@ export interface ConceptPickInterrupt {
   concepts: ConceptIdea[];
 }
 
-// Either marketing interrupt — distinguished by `kind` (concept_pick has no script_beats).
-export type MarketingInterrupt = ReviewInterrupt | ConceptPickInterrupt;
+// Payload emitted by the marketing still_review node's interrupt (the visual gate). The operator
+// approves the generated stills — or asks to re-roll specific shots — before the Instagram post is
+// finalized. `index: -1` targets the hero image.
+export interface StillReviewShot {
+  index: number;
+  image_url: string | null;
+  scene_description: string | null;
+}
+export interface StillReviewInterrupt {
+  kind: "still_review";
+  question: string;
+  hero_image_url: string | null;
+  shots: StillReviewShot[];
+}
+
+// What we send back on resume (read by still_review in nodes.py): approve, or regenerate the listed
+// shot indices (with optional per-shot prompt overrides).
+export interface StillDecision {
+  approved?: boolean;
+  regenerate?: number[];
+  prompt_overrides?: Record<number, string>;
+}
+
+// The marketing interrupts — distinguished by `kind` (concept_pick carries concepts; copy_review
+// carries the caption; still_review carries stills).
+export type MarketingInterrupt = ReviewInterrupt | ConceptPickInterrupt | StillReviewInterrupt;
 
 // One pending write the workspace agent wants to run (send/create/…), awaiting human approval. Both
 // HITL backends expose `name` + `args` (the installed HumanInTheLoopMiddleware uses `args`, same key
@@ -147,7 +170,7 @@ export interface WorkspaceDecision {
 export type ThreadInterrupt = MarketingInterrupt | WorkspaceApprovalInterrupt;
 
 // Discriminator: a workspace write-approval interrupt carries an `action_requests` array (the
-// marketing concept_pick/script_review gates never do). Check this BEFORE casting to MarketingInterrupt.
+// marketing concept_pick/copy_review gates never do). Check this BEFORE casting to MarketingInterrupt.
 export function isWorkspaceApproval(value: unknown): value is WorkspaceApprovalInterrupt {
   return (
     typeof value === "object" &&
@@ -201,11 +224,16 @@ export interface A2uiMetric {
   trend?: "up" | "down" | "neutral" | null;
   trend_value?: string | null;
 }
+export interface A2uiField {
+  label: string;
+  value: string;
+}
 export interface A2uiBlock {
-  type: "heading" | "text" | "metrics" | "chart" | "table";
+  type: "heading" | "text" | "metrics" | "fields" | "chart" | "table";
   text?: string | null; // heading / text
   metrics?: A2uiMetric[] | null; // metrics
-  title?: string | null; // chart
+  fields?: A2uiField[] | null; // fields (label→value detail rows for one record/entity)
+  title?: string | null; // chart / optional title above a fields or table block
   chart_kind?: "bar" | "line" | "pie" | null; // chart
   series?: ChartPoint[] | null; // chart
   columns?: string[] | null; // table
@@ -216,25 +244,22 @@ export interface A2uiSurface {
 }
 
 // The marketing render result (mirrors RenderResult/RenderShot in schemas.py), pushed as the
-// `marketing_render` card by the OpenRouter renderer. Stills (`image_url`) are served by the
-// ops-api at /media (prefix with OPS_API_URL); videos are async OpenRouter jobs the card polls via
-// the /api/render/video proxy until `video_job_id` completes, then streams the result.
+// `marketing_render` card by the OpenRouter renderer — the hero image + a still per shot that make
+// up the Instagram post. Stills (`image_url`) are served by the ops-api at /media (prefix with
+// OPS_API_URL).
 export interface RenderShot {
   index: number;
   scene_description: string;
-  t2v_prompt: string;
+  image_prompt: string;
   image_url?: string | null;
-  video_job_id?: string | null;
   error?: string | null;
 }
 
 export interface RenderResult {
-  status: "placeholder" | "rendering" | "rendered" | "cancelled" | "error";
-  mode: "image_to_video" | "text_to_video" | "none";
+  status: "placeholder" | "stills_ready" | "rendered" | "cancelled" | "error";
   hero_image_url?: string | null;
   shots: RenderShot[];
   image_model?: string | null;
-  video_model?: string | null;
   detail: string;
 }
 

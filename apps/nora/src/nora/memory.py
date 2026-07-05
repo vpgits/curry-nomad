@@ -41,11 +41,10 @@ from nora.observability import get_logger
 from nora.schemas import (
     ConceptIdea,
     Critique,
+    PostBrief,
     RouteDecision,
-    ScriptBeat,
     Shot,
     ShotPrompt,
-    VideoBrief,
 )
 
 log = get_logger(__name__)
@@ -123,6 +122,65 @@ def recall(store: BaseStore, config: dict | None, query: str, *, limit: int = 3)
         for category in ("facts", "preferences"):
             out["user"].extend(store.search(user_ns(uid, category), query=query, limit=limit))
     return out
+
+
+# --- Prompt-injection helpers: fold recalled memory into ANY node's system prompt -----------
+# Analytics folds `global.definitions` and marketing folds `global.brand` into their prompts by hand
+# (each searches the ONE namespace it needs). These give the SAME retrieval a reusable, node-agnostic
+# shape so the supervisor and workspace agent can be memory-aware too — searching every tier and
+# formatting a compact block. Both are best-effort (return None/"" on any failure) so a memory hiccup
+# never crashes a turn.
+def current_store() -> BaseStore | None:
+    """The store configured for THIS graph run (runtime-injected on the platform, build-time in the
+    CLI/tests), or None when there isn't one. `get_store()` raises outside a run / with no store, so a
+    node folding memory into its prompt degrades to "no memory" instead of crashing."""
+    try:
+        return get_store()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def current_config() -> dict | None:
+    """The run config for THIS graph step (carries the server-injected `langgraph_auth_user`), or
+    None. Best-effort like `current_store`, so a node can resolve per-user memory without threading
+    `config` through its signature."""
+    try:
+        return get_config()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def recall_block(
+    store: BaseStore | None,
+    config: dict | None,
+    query: str,
+    *,
+    limit: int = 3,
+    header: str = "Relevant long-term memory",
+) -> str:
+    """Format `recall()` hits into a compact prompt block — shared (global) knowledge plus THIS
+    operator's saved context — or "" when there's nothing (or no store). A node folds the result into
+    its system prompt so global brand/definitions and per-user preferences shape behaviour. Empty
+    store / no hits / no identity all collapse to "" (the caller appends only when truthy), so a graph
+    with no seeded memory or no signed-in operator behaves exactly as before."""
+    if store is None:
+        return ""
+    try:
+        hits = recall(store, config, query, limit=limit)
+    except Exception:  # noqa: BLE001 — memory is best-effort; never break a turn
+        return ""
+    shared = [t for t in (_item_text(i) for i in hits["global"]) if t]
+    user = [t for t in (_item_text(i) for i in hits["user"]) if t]
+    if not shared and not user:
+        return ""
+    lines = [f"{header}:"]
+    if shared:
+        lines.append("Shared knowledge (Curry Nomad):")
+        lines.extend(f"- {t}" for t in shared)
+    if user:
+        lines.append("This operator's saved context (their preferences override shared defaults):")
+        lines.extend(f"- {t}" for t in user)
+    return "\n".join(lines)
 
 
 # --- Write paths (asymmetric: per-user is free, global is gated) ----------------------------
@@ -250,7 +308,7 @@ def build_store(settings: Settings) -> InMemoryStore:
 # (Aegra) the server builds its own serializer, so the JSON-native-state design in
 # nora/state.py — not this list — is what keeps persistence portable there.
 _NORA_MSGPACK_SCHEMAS = [
-    RouteDecision, ConceptIdea, ScriptBeat, Shot, ShotPrompt, Critique, VideoBrief,
+    RouteDecision, ConceptIdea, Shot, ShotPrompt, Critique, PostBrief,
 ]
 
 

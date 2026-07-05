@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Calendar, Check, FileText, Mail, Pencil, Wrench, X } from "lucide-react";
+import { useQueryState } from "nuqs";
 
 import { NoraAvatar } from "@/components/thread/messages/ai";
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,7 @@ import type {
   WorkspaceDecision,
 } from "@/lib/types";
 import { buildSubmitConfig } from "@/lib/run-config";
+import { logHitlStep } from "@/lib/hitl-log";
 import { useSubmitLock } from "@/lib/use-submit-lock";
 import { useStreamContext } from "@/providers/Stream";
 import { cn } from "@/lib/utils";
@@ -66,6 +68,7 @@ export function WorkspaceApproval({ interrupt }: { interrupt: WorkspaceApprovalI
   const stream = useStreamContext();
   const busy = stream.isLoading;
   const [locked, runLocked] = useSubmitLock();
+  const [threadId] = useQueryState("threadId");
   const actions = interrupt.action_requests ?? [];
 
   const [editing, setEditing] = useState(false);
@@ -95,12 +98,31 @@ export function WorkspaceApproval({ interrupt }: { interrupt: WorkspaceApprovalI
     // `workspace` node re-runs from the top and re-reads the token from run config, so without it the
     // approved action degrades to the "connect" stub instead of executing. See lib/run-config.ts.
     const runConfig = await buildSubmitConfig();
+    // Anchor the record to the message this approval FOLLOWED — captured before submit (which appends
+    // new messages) — so ResolvedSteps shows it only for the branch it belongs to (not every retry).
+    const anchorId = stream.messages[stream.messages.length - 1]?.id;
     stream.submit(undefined, {
       command: { resume: { decisions } },
       streamMode: ["values"],
       streamSubgraphs: true,
       ...runConfig,
     });
+    // Record the decision so it stays in the conversation loop after the gate clears — with a compact
+    // stand-in for the card that just vanished: the titles of the actions that ran.
+    const approved = decisions.filter((d) => d.type !== "reject").length;
+    const titles = actions.map((a) => resolveLayout(a).title).filter(Boolean);
+    const detail = titles.length ? titles.join(" · ") : undefined;
+    logHitlStep(
+      threadId,
+      approved > 0
+        ? {
+            icon: "approve",
+            label: `Workspace: ${approved} action${approved === 1 ? "" : "s"} approved`,
+            detail,
+            anchorId,
+          }
+        : { icon: "reject", label: "Workspace actions rejected", detail, anchorId },
+    );
   };
 
   const approve = () =>

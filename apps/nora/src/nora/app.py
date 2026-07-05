@@ -96,9 +96,10 @@ def _handle_interrupt(payload) -> Command:
     """Prompt the operator for an approve/edit/reject decision and build the resume Command."""
     question = payload.get("question", "Approve?") if isinstance(payload, dict) else str(payload)
     print(f"\n⏸  {question}")
-    if isinstance(payload, dict) and payload.get("script_beats"):
-        for beat in payload["script_beats"]:
-            print(f"    [{beat['t_start_s']}-{beat['t_end_s']}s] {beat['voiceover']}")
+    if isinstance(payload, dict) and payload.get("caption"):
+        print(f"    caption: {payload['caption']}")
+        for line in payload.get("on_screen_texts") or []:
+            print(f"    · {line}")
     answer = input("    approve / reject ? [approve]: ").strip().lower() or "approve"
     approved = answer.startswith("a")
     log.info("hitl.resumed", decision="approve" if approved else "reject")

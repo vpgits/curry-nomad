@@ -5,7 +5,7 @@ against the bundled DB, then compare the agent's final answer to it — the trut
 hand-typed. Plus trajectory metrics: was the final SQL valid, and (for recovery items) did the
 agent hit a SQL error and then recover?
 
-Marketing (judge + guardrails): hard structural/grounding/safety checks on the VideoBrief, plus
+Marketing (judge + guardrails): hard structural/grounding/safety checks on the PostBrief, plus
 an LLM-as-judge rubric for brand voice and coherence.
 """
 
@@ -17,7 +17,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from pydantic import BaseModel, Field
 
 from nora.marketing.nodes import lookup_product_facts
-from nora.schemas import VideoBrief
+from nora.schemas import PostBrief
 
 # Substrings that signal a run_sql ToolMessage was the error/repair hint (see handle_sql_error).
 _SQL_ERROR_MARKER = "your query failed"
@@ -121,20 +121,19 @@ def count_tool_calls(messages: list) -> int:
 # --- marketing: deterministic guardrails ----------------------------------------------
 
 
-def check_guardrails(brief: VideoBrief, spice_db) -> tuple[bool, list[str]]:
-    """Hard checks on the VideoBrief. Returns (passed, list_of_failures)."""
+def check_guardrails(brief: PostBrief, spice_db) -> tuple[bool, list[str]]:
+    """Hard checks on the PostBrief. Returns (passed, list_of_failures)."""
     failures: list[str] = []
 
-    if not (25 <= brief.target_duration_s <= 35):
-        failures.append("target_duration_out_of_range")
     if not (2 <= len(brief.shots) <= 8):
         failures.append("shot_count_out_of_range")
     if len(brief.shot_prompts) != len(brief.shots):
         failures.append("shot_prompts_count_mismatch")
 
-    beats = brief.script_beats
-    if not beats or beats[0].t_start_s != 0 or not beats[0].voiceover.strip() or beats[0].t_end_s > 3:
-        failures.append("hook_missing_or_late")
+    # The caption must carry a hook on its first line.
+    first_line = brief.caption.strip().splitlines()[0].strip() if brief.caption.strip() else ""
+    if not first_line:
+        failures.append("hook_missing")
     if not brief.cta.strip():
         failures.append("cta_empty")
 
@@ -146,9 +145,8 @@ def check_guardrails(brief: VideoBrief, spice_db) -> tuple[bool, list[str]]:
     if str(product["origin"]).lower() not in facts_text:
         failures.append("grounding_origin_missing")
 
-    # Banned claims in any voiceover / on-screen text.
-    copy = " ".join(b.voiceover for b in beats)
-    copy += " " + " ".join(b.on_screen_text or "" for b in beats)
+    # Banned claims in the caption / on-screen text.
+    copy = brief.caption + " " + " ".join(s.on_screen_text or "" for s in brief.shots)
     if any(term in copy.lower() for term in BANNED_CLAIMS):
         failures.append("banned_claim")
 
@@ -170,18 +168,17 @@ JUDGE_RUBRIC = (
     "ad copy, never medical claims). Score the creative on two axes, 1-5:\n"
     "- brand_voice: 5 = unmistakably warm, cheeky, proudly Sri Lankan and grounded in the real "
     "product/origin; 1 = generic, off-brand, or claim-y.\n"
-    "- coherence: 5 = a tight, single-idea reel with a strong 3-second hook and clear CTA; "
+    "- coherence: 5 = a tight, single-idea image post with a strong first-line hook and clear CTA; "
     "1 = incoherent or no hook.\n"
     "Give a one-line justification."
 )
 
 
-def judge_brief(brief: VideoBrief, brand_voice: str, judge_model) -> JudgeScore:
+def judge_brief(brief: PostBrief, brand_voice: str, judge_model) -> JudgeScore:
     """Score the brief with an LLM judge (structured output)."""
-    beats = "\n".join(f"[{b.t_start_s}-{b.t_end_s}s] {b.voiceover}" for b in brief.script_beats)
     prompt = (
         f"{JUDGE_RUBRIC}\n\nBrand voice reference:\n{brand_voice}\n\n"
         f"Creative for {brief.product_name}\nConcept: {brief.concept}\nHook: {brief.hook}\n"
-        f"CTA: {brief.cta}\nScript:\n{beats}\n"
+        f"CTA: {brief.cta}\nCaption:\n{brief.caption}\n"
     )
     return judge_model.with_structured_output(JudgeScore).invoke(prompt)

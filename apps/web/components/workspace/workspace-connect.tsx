@@ -70,7 +70,7 @@ export function WorkspaceConnect() {
 
 function Bar({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mx-auto flex max-w-3xl items-center justify-between gap-2 px-[26px] pt-2 text-[12px]">
+    <div className="mx-auto flex max-w-7xl items-center justify-between gap-2 px-[26px] pt-2 text-[12px]">
       {children}
     </div>
   );

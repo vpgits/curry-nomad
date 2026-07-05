@@ -78,32 +78,30 @@ def test_count_tool_calls():
 
 
 def test_check_guardrails_pass_and_fail():
-    from nora.schemas import ScriptBeat, Shot, ShotPrompt, VideoBrief
+    from nora.schemas import PostBrief, Shot, ShotPrompt
 
     db = _db()
-    good = VideoBrief(
+    good = PostBrief(
         product_name="Ceylon Cinnamon (Alba)",
         concept="origin story",
         hook="Real Matale cinnamon",
-        target_duration_s=30,
-        script_beats=[
-            ScriptBeat(t_start_s=0, t_end_s=3, voiceover="From Matale, with love."),
-            ScriptBeat(t_start_s=3, t_end_s=30, voiceover="Grate it fresh."),
+        caption="From Matale, with love.\nGrate it fresh over your morning kiribath. Shop now.",
+        shots=[
+            Shot(index=0, scene_description="a", on_screen_text="From Matale"),
+            Shot(index=1, scene_description="b", on_screen_text="Grate it fresh"),
         ],
-        shots=[Shot(index=0, scene_description="a", duration_s=15), Shot(index=1, scene_description="b", duration_s=15)],
-        shot_prompts=[ShotPrompt(index=0, t2v_prompt="x"), ShotPrompt(index=1, t2v_prompt="y")],
+        shot_prompts=[ShotPrompt(index=0, image_prompt="x"), ShotPrompt(index=1, image_prompt="y")],
         cta="Shop now",
-        music_mood="warm",
         hashtags=["#CurryNomad"],
         product_facts_used=["Ceylon Cinnamon (Alba)", "origin: Matale", "blend"],
     )
     passed, failures = check_guardrails(good, db)
     assert passed, failures
 
-    bad = good.model_copy(update={"target_duration_s": 60, "cta": "", "product_facts_used": ["nope"]})
+    bad = good.model_copy(update={"caption": "", "cta": "", "product_facts_used": ["nope"]})
     passed2, failures2 = check_guardrails(bad, db)
     assert not passed2
-    assert "target_duration_out_of_range" in failures2
+    assert "hook_missing" in failures2
     assert "cta_empty" in failures2
     assert "grounding_name_missing" in failures2
 
